@@ -137,12 +137,9 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
     logger.info("Scanning %s", url)
 
     with db_conn() as conn:
-        # TTL check
+        # TTL check — use last_scanned_at so clean endpoints aren't rescanned.
         recent = conn.execute(
-            """SELECT last_seen FROM findings
-               WHERE endpoint_id = ?
-                 AND last_seen > datetime('now', ? || ' hours')
-               LIMIT 1""",
+            "SELECT last_scanned_at FROM endpoints WHERE id = ? AND last_scanned_at > datetime('now', ? || ' hours')",
             (endpoint_id, f"-{NUCLEI_INTERVAL_HOURS}"),
         ).fetchone()
         if recent:
@@ -215,6 +212,10 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
 
     with db_conn() as conn:
         conn.execute(
+            "UPDATE endpoints SET last_scanned_at = datetime('now') WHERE id = ?",
+            (endpoint_id,),
+        )
+        conn.execute(
             """UPDATE jobs SET status = 'done', finished_at = datetime('now'),
                raw_output_path = ? WHERE id = ?""",
             (output_file, job_id),
@@ -233,10 +234,9 @@ def record_failed_job(task: dict, reason: str) -> None:
 
 
 def _template_updater_loop():
-    """Background thread: refresh templates on the configured interval."""
+    """Background thread: refresh templates immediately, then on the configured interval."""
     interval_secs = TEMPLATE_UPDATE_HOURS * 3600
     while True:
-        time.sleep(interval_secs)
         logger.info("Updating Nuclei templates...")
         try:
             subprocess.run(
@@ -246,6 +246,7 @@ def _template_updater_loop():
             logger.info("Template update complete")
         except Exception as exc:
             logger.error("Template update failed: %s", exc)
+        time.sleep(interval_secs)
 
 
 def main():

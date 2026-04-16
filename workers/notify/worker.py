@@ -95,6 +95,16 @@ def _dispatch(text: str) -> None:
         _send_discord(text)
 
 
+def _active_channels() -> list:
+    """Return names of all currently configured notification channels."""
+    channels = []
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        channels.append("telegram")
+    if DISCORD_WEBHOOK_URL:
+        channels.append("discord")
+    return channels
+
+
 def _record_notification(finding_id: int | None, channel: str) -> None:
     with db_conn() as conn:
         conn.execute(
@@ -136,8 +146,8 @@ def process_task(task: dict) -> None:
             f"Matched at: {row['matched_at']}"
         )
         _dispatch(text)
-        channel = "telegram" if TELEGRAM_BOT_TOKEN else "discord"
-        _record_notification(finding_id, channel)
+        for ch in _active_channels():
+            _record_notification(finding_id, ch)
         logger.info("Notified: finding %d (%s)", finding_id, sev)
 
     elif notification_type == "new_subdomain":
@@ -145,12 +155,16 @@ def process_task(task: dict) -> None:
         scope_root = task.get("scope_root", "")
         text = f"*New Subdomain*\n`{hostname}` (scope: `{scope_root}`)"
         _dispatch(text)
+        for ch in _active_channels():
+            _record_notification(None, ch)
         logger.info("Notified: new subdomain %s", hostname)
 
     elif notification_type == "new_endpoint":
         url = task.get("url", "")
         text = f"*New Live Endpoint*\n{url}"
         _dispatch(text)
+        for ch in _active_channels():
+            _record_notification(None, ch)
         logger.info("Notified: new endpoint %s", url)
 
     else:

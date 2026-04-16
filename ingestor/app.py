@@ -89,7 +89,7 @@ def _refresh_stale_targets() -> int:
                     AND j.finished_at > datetime('now', :hours || ' hours')
               )
             """,
-            {"hours": f"-{RECON_INTERVAL_HOURS}"},
+            {"hours": f"-{int(RECON_INTERVAL_HOURS)}"},
         ).fetchall()
 
     r = get_r()
