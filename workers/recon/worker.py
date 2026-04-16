@@ -93,6 +93,36 @@ def run_subfinder(domain: str, output_file: str) -> list:
         return [line.strip() for line in fh if line.strip()]
 
 
+def run_amass_passive(domain: str, output_file: str) -> list:
+    """Run amass in passive-only mode; return list of discovered hostnames."""
+    cmd = [
+        "amass",
+        "enum",
+        "-passive",
+        "-d", domain,
+        "-o", output_file,
+        "-silent",
+        "-timeout", "10",   # minutes
+    ]
+    logger.info("amass passive: %s", domain)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=660)
+        if proc.returncode not in (0, 1):
+            logger.warning("amass stderr for %s: %s", domain, proc.stderr[:500])
+    except subprocess.TimeoutExpired:
+        logger.error("amass timed out for %s", domain)
+        return []
+    except FileNotFoundError:
+        logger.warning("amass binary not found — skipping")
+        return []
+
+    if not os.path.exists(output_file):
+        return []
+
+    with open(output_file) as fh:
+        return [line.strip() for line in fh if line.strip()]
+
+
 def process_task(r: redis_lib.Redis, task: dict) -> None:
     domain = task.get("domain") or task.get("target")
     if not domain:
@@ -134,10 +164,16 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
     os.makedirs(out_dir, exist_ok=True)
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
     output_file = os.path.join(out_dir, f"subfinder_{ts}.txt")
+    amass_output_file = os.path.join(out_dir, f"amass_{ts}.txt")
 
     try:
-        found = run_subfinder(domain, output_file)
-        logger.info("subfinder found %d hosts for %s", len(found), domain)
+        subfinder_found = run_subfinder(domain, output_file)
+        amass_found     = run_amass_passive(domain, amass_output_file)
+        found = list({h for h in subfinder_found + amass_found if h})
+        logger.info(
+            "recon found %d hosts for %s (subfinder=%d, amass=%d)",
+            len(found), domain, len(subfinder_found), len(amass_found),
+        )
 
         new_count = 0
         with db_conn() as conn:
@@ -202,12 +238,15 @@ def record_failed_job(task: dict, reason: str) -> None:
 
 
 def main():
-    logger.info("Recon worker starting (subfinder version check):")
-    try:
-        v = subprocess.run(["subfinder", "-version"], capture_output=True, text=True, timeout=10)
-        logger.info(v.stdout.strip() or v.stderr.strip())
-    except Exception as exc:
-        logger.warning("Could not get subfinder version: %s", exc)
+    logger.info("Recon worker starting")
+    for tool in ("subfinder", "amass"):
+        try:
+            v = subprocess.run([tool, "-version"], capture_output=True, text=True, timeout=10)
+            logger.info("%s: %s", tool, v.stdout.strip() or v.stderr.strip())
+        except FileNotFoundError:
+            logger.warning("%s binary not found", tool)
+        except Exception as exc:
+            logger.warning("Could not get %s version: %s", tool, exc)
 
     r = wait_for_redis()
     init_db()

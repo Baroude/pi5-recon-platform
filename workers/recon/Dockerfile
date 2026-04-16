@@ -1,13 +1,10 @@
 # ---------------------------------------------------------------------------
-# Recon worker image — Python + subfinder (ARM64)
+# Recon worker image — Python + subfinder + amass (ARM64)
 #
-# Multi-stage: copy the subfinder binary from the official ProjectDiscovery
-# image.  The binary lives at /usr/local/bin/subfinder in that image.
-# If a future release moves it, run:
-#   docker run --rm --platform=linux/arm64 ghcr.io/projectdiscovery/subfinder:latest which subfinder
-# and update the COPY path below.
+# Multi-stage: copy binaries from official images.
 # ---------------------------------------------------------------------------
 FROM --platform=linux/arm64 ghcr.io/projectdiscovery/subfinder:latest AS subfinder-src
+FROM --platform=linux/arm64 ghcr.io/owasp-amass/amass:latest AS amass-src
 
 FROM --platform=linux/arm64 python:3.12-slim
 
@@ -16,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=subfinder-src /usr/local/bin/subfinder /usr/local/bin/subfinder
+COPY --from=amass-src /usr/local/bin/amass /usr/local/bin/amass
 
 WORKDIR /app
 
