@@ -187,13 +187,29 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
             logger.info("Skipping %s — probed recently", hostname)
             return
 
+    with db_conn() as conn:
+        job_id = conn.execute(
+            """INSERT INTO jobs (type, target_ref, status, started_at, worker_name)
+               VALUES ('probe_host', ?, 'running', datetime('now'), ?)""",
+            (hostname, WORKER_NAME),
+        ).lastrowid
+
     out_dir = os.path.join(OUTPUT_DIR, "httpx", hostname)
     os.makedirs(out_dir, exist_ok=True)
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
     output_file = os.path.join(out_dir, f"httpx_{ts}.jsonl")
 
-    records = run_httpx(hostname, output_file)
-    logger.info("httpx: %d results for %s", len(records), hostname)
+    try:
+        records = run_httpx(hostname, output_file)
+        logger.info("httpx: %d results for %s", len(records), hostname)
+
+    except Exception:
+        with db_conn() as conn:
+            conn.execute(
+                "UPDATE jobs SET status = 'failed', finished_at = datetime('now') WHERE id = ?",
+                (job_id,),
+            )
+        raise
 
     with db_conn() as conn:
         for rec in records:
@@ -248,6 +264,13 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                         "endpoint_id": endpoint_id,
                         "url": url,
                     })
+
+    with db_conn() as conn:
+        conn.execute(
+            """UPDATE jobs SET status = 'done', finished_at = datetime('now'),
+               raw_output_path = ? WHERE id = ?""",
+            (output_file, job_id),
+        )
 
     logger.info("Probe complete for %s", hostname)
 
