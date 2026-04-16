@@ -26,6 +26,7 @@ import sys
 import tempfile
 import time
 from datetime import datetime
+from urllib.parse import urlparse, urlunparse
 
 import redis as redis_lib
 
@@ -64,6 +65,35 @@ logger = logging.getLogger(WORKER_NAME)
 # ---------------------------------------------------------------------------
 
 SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _normalize_url(raw_url: str) -> str:
+    """
+    Canonicalize a URL so that the same logical endpoint always maps to one key:
+    - lower-case the host
+    - strip default ports (:80 for http, :443 for https)
+    - strip a bare trailing slash from the path (but keep /path/)
+    """
+    try:
+        p = urlparse(raw_url)
+        host = p.hostname or ""
+        port = p.port
+        scheme = p.scheme.lower()
+        if port and port == _DEFAULT_PORTS.get(scheme):
+            netloc = host
+        elif port:
+            netloc = f"{host}:{port}"
+        else:
+            netloc = host
+        path = p.path.rstrip("/") or "/"
+        # strip the trailing slash only for the root path
+        if path == "/":
+            path = ""
+        return urlunparse((scheme, netloc, path, p.params, p.query, ""))
+    except Exception:
+        return raw_url
 
 
 def _content_hash(record: dict) -> str:
@@ -167,7 +197,7 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
 
     with db_conn() as conn:
         for rec in records:
-            url         = rec.get("url", "")
+            url         = _normalize_url(rec.get("url", ""))
             status_code = rec.get("status-code")
             alive       = bool(url and status_code and 100 <= int(status_code) < 600)
 
