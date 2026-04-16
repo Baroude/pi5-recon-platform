@@ -13,6 +13,7 @@ Endpoints
 
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -121,6 +122,15 @@ def _refresh_loop():
 # Models
 # ---------------------------------------------------------------------------
 
+# Matches a valid public domain: dot-separated labels of [a-z0-9-], no
+# consecutive dots, no leading/trailing dots, at least two labels (TLD present).
+# Bare IPs and single-label hostnames (e.g. "localhost") are rejected.
+_DOMAIN_RE = re.compile(
+    r"^(?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)"
+    r"+[a-z]{2,}$"
+)
+
+
 class TargetIn(BaseModel):
     scope_root: str
     notes: Optional[str] = None
@@ -129,8 +139,13 @@ class TargetIn(BaseModel):
     @classmethod
     def normalise(cls, v: str) -> str:
         v = v.strip().lower().lstrip("*.")
-        if not v or " " in v:
-            raise ValueError("scope_root must be a valid domain")
+        if not v:
+            raise ValueError("scope_root must not be empty")
+        if not _DOMAIN_RE.match(v):
+            raise ValueError(
+                "scope_root must be a valid public domain (e.g. example.com). "
+                "Bare IPs, single-label names, and malformed hostnames are not accepted."
+            )
         return v
 
 
