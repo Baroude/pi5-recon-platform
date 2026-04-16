@@ -1,0 +1,167 @@
+version: "3.9"
+
+# ---------------------------------------------------------------------------
+# Raspberry Pi 5 Recon Platform
+# Deploy via Portainer: stack → deploy from git repository or paste this file.
+# Run scripts/init-dirs.sh on the Pi first to create bind-mount directories.
+# ---------------------------------------------------------------------------
+
+x-worker-defaults: &worker-defaults
+  restart: unless-stopped
+  networks:
+    - recon-net
+  depends_on:
+    redis:
+      condition: service_healthy
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+
+  # --------------------------------------------------------------------------
+  # Redis 7 — queue broker + state store
+  # AOF persistence ensures in-flight tasks survive restarts.
+  # maxmemory cap protects the Pi from OOM; lru eviction keeps keys bounded.
+  # --------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    platform: linux/arm64
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+    volumes:
+      - /opt/recon-platform/data/redis:/data
+    networks:
+      - recon-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --------------------------------------------------------------------------
+  # Ingestor — REST API for target submission + periodic refresh scheduler
+  # --------------------------------------------------------------------------
+  ingestor:
+    <<: *worker-defaults
+    build:
+      context: .
+      dockerfile: ingestor/Dockerfile
+    platform: linux/arm64
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
+      - DEFAULT_RECON_INTERVAL_HOURS=${DEFAULT_RECON_INTERVAL_HOURS:-24}
+    volumes:
+      - /opt/recon-platform/data/db:/data/db
+      - /opt/recon-platform/logs:/logs
+    ports:
+      - "${INGESTOR_PORT:-8090}:8090"
+
+  # --------------------------------------------------------------------------
+  # Recon worker — subfinder passive discovery → enqueues probe_host
+  # --------------------------------------------------------------------------
+  worker-recon:
+    <<: *worker-defaults
+    build:
+      context: .
+      dockerfile: workers/recon/Dockerfile
+    platform: linux/arm64
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
+      - OUTPUT_DIR=${OUTPUT_DIR:-/data/output}
+      - MAX_RECON_CONCURRENCY=${MAX_RECON_CONCURRENCY:-2}
+      - DEFAULT_RECON_INTERVAL_HOURS=${DEFAULT_RECON_INTERVAL_HOURS:-24}
+      - SUBFINDER_SHODAN_API_KEY=${SUBFINDER_SHODAN_API_KEY:-}
+      - SUBFINDER_CENSYS_API_ID=${SUBFINDER_CENSYS_API_ID:-}
+      - SUBFINDER_CENSYS_API_SECRET=${SUBFINDER_CENSYS_API_SECRET:-}
+      - SUBFINDER_SECURITYTRAILS_API_KEY=${SUBFINDER_SECURITYTRAILS_API_KEY:-}
+      - SUBFINDER_VIRUSTOTAL_API_KEY=${SUBFINDER_VIRUSTOTAL_API_KEY:-}
+    volumes:
+      - /opt/recon-platform/data/db:/data/db
+      - /opt/recon-platform/data/output:/data/output
+      - /opt/recon-platform/logs:/logs
+      - /opt/recon-platform/config:/config:ro
+
+  # --------------------------------------------------------------------------
+  # HTTP worker — httpx probing → enqueues scan_http
+  # --------------------------------------------------------------------------
+  worker-httpx:
+    <<: *worker-defaults
+    build:
+      context: .
+      dockerfile: workers/httpx_worker/Dockerfile
+    platform: linux/arm64
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
+      - OUTPUT_DIR=${OUTPUT_DIR:-/data/output}
+      - MAX_HTTPX_CONCURRENCY=${MAX_HTTPX_CONCURRENCY:-10}
+      - DEFAULT_HTTPX_INTERVAL_HOURS=${DEFAULT_HTTPX_INTERVAL_HOURS:-12}
+    volumes:
+      - /opt/recon-platform/data/db:/data/db
+      - /opt/recon-platform/data/output:/data/output
+      - /opt/recon-platform/logs:/logs
+
+  # --------------------------------------------------------------------------
+  # Nuclei worker — template scans on live endpoints → enqueues notify_finding
+  # Templates are updated at container start and on a configurable interval.
+  # --------------------------------------------------------------------------
+  worker-nuclei:
+    <<: *worker-defaults
+    build:
+      context: .
+      dockerfile: workers/nuclei/Dockerfile
+    platform: linux/arm64
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
+      - OUTPUT_DIR=${OUTPUT_DIR:-/data/output}
+      - NUCLEI_TEMPLATES_DIR=${NUCLEI_TEMPLATES_DIR:-/templates}
+      - NUCLEI_TEMPLATES_UPDATE_INTERVAL_HOURS=${NUCLEI_TEMPLATES_UPDATE_INTERVAL_HOURS:-24}
+      - NUCLEI_SEVERITY_MIN=${NUCLEI_SEVERITY_MIN:-medium}
+      - MAX_NUCLEI_CONCURRENCY=${MAX_NUCLEI_CONCURRENCY:-1}
+      - DEFAULT_NUCLEI_INTERVAL_HOURS=${DEFAULT_NUCLEI_INTERVAL_HOURS:-24}
+    volumes:
+      - /opt/recon-platform/data/db:/data/db
+      - /opt/recon-platform/data/output:/data/output
+      - /opt/recon-platform/logs:/logs
+      - /opt/recon-platform/nuclei-templates:/templates
+
+  # --------------------------------------------------------------------------
+  # Notify worker — dispatches Telegram / Discord alerts
+  # --------------------------------------------------------------------------
+  worker-notify:
+    <<: *worker-defaults
+    build:
+      context: .
+      dockerfile: workers/notify/Dockerfile
+    platform: linux/arm64
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - NUCLEI_SEVERITY_MIN=${NUCLEI_SEVERITY_MIN:-medium}
+    volumes:
+      - /opt/recon-platform/data/db:/data/db
+      - /opt/recon-platform/logs:/logs
+
+networks:
+  recon-net:
+    driver: bridge
