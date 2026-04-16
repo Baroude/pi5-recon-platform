@@ -31,6 +31,7 @@ from urllib.parse import urlparse, urlunparse
 import redis as redis_lib
 
 sys.path.insert(0, "/app")
+from common.cleanup import cleanup_old_outputs
 from common.db import db_conn, init_db
 from common.queue import (
     ack_task,
@@ -40,6 +41,7 @@ from common.queue import (
     recover_processing_queue,
     wait_for_redis,
 )
+from common.scope import is_in_scope
 
 # ---------------------------------------------------------------------------
 QUEUE       = "probe_host"
@@ -116,7 +118,7 @@ def run_httpx(hostname: str, output_file: str) -> list:
         "-status-code",
         "-title",
         "-tech-detect",
-        "-follow-redirects",
+        "-max-redirects", "1",
         "-threads", str(MAX_CONCURRENCY),
         "-timeout", "10",
         "-retries", "1",
@@ -149,11 +151,13 @@ def run_httpx(hostname: str, output_file: str) -> list:
 
 
 def process_task(r: redis_lib.Redis, task: dict) -> None:
-    hostname  = task.get("hostname")
-    target_id = task.get("target_id")
+    hostname   = task.get("hostname")
+    target_id  = task.get("target_id")
+    scope_root = task.get("scope_root", "")
     if not hostname or not target_id:
         raise ValueError(f"Missing hostname or target_id: {task}")
 
+    cleanup_old_outputs(OUTPUT_DIR, "httpx_*.jsonl")
     logger.info("Probing %s", hostname)
 
     # Resolve subdomain_id from DB; insert if not yet committed by recon worker.
@@ -210,6 +214,16 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
 
             if not url:
                 continue
+
+            # Scope guard: reject endpoints that redirected outside the authorised root.
+            if scope_root:
+                parsed_host = urlparse(url).hostname or ""
+                if not is_in_scope(parsed_host, scope_root):
+                    logger.warning(
+                        "httpx: out-of-scope endpoint skipped — host=%s scope=%s",
+                        parsed_host, scope_root,
+                    )
+                    continue
 
             tech       = json.dumps(rec.get("tech") or rec.get("technologies") or [])
             title      = rec.get("title", "")

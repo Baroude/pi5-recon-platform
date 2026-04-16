@@ -2,7 +2,8 @@
 # Nuclei worker image — Python + nuclei binary (ARM64)
 # Templates are bind-mounted at /templates and updated at container start.
 # ---------------------------------------------------------------------------
-FROM --platform=linux/arm64 ghcr.io/projectdiscovery/nuclei:latest AS nuclei-src
+# Pin to specific version — update deliberately after testing
+FROM --platform=linux/arm64 ghcr.io/projectdiscovery/nuclei:v3.2.9 AS nuclei-src
 
 FROM --platform=linux/arm64 python:3.12-slim
 

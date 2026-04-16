@@ -28,10 +28,12 @@ import sys
 import threading
 import time
 from datetime import datetime
+from urllib.parse import urlparse
 
 import redis as redis_lib
 
 sys.path.insert(0, "/app")
+from common.cleanup import cleanup_old_outputs
 from common.db import db_conn, init_db
 from common.queue import (
     ack_task,
@@ -41,6 +43,7 @@ from common.queue import (
     recover_processing_queue,
     wait_for_redis,
 )
+from common.scope import is_in_scope
 
 # ---------------------------------------------------------------------------
 QUEUE       = "scan_http"
@@ -55,6 +58,7 @@ SEVERITY_MIN          = os.environ.get("NUCLEI_SEVERITY_MIN", "medium")
 MAX_CONCURRENCY       = int(os.environ.get("MAX_NUCLEI_CONCURRENCY", 1))
 OUTPUT_DIR            = os.environ.get("OUTPUT_DIR", "/data/output")
 TEMPLATE_UPDATE_HOURS = float(os.environ.get("NUCLEI_TEMPLATES_UPDATE_INTERVAL_HOURS", 24))
+NUCLEI_THROTTLE_SECS  = int(os.environ.get("NUCLEI_THROTTLE_SECS", 30))
 
 SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
@@ -134,7 +138,42 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
     if not url or not endpoint_id:
         raise ValueError(f"Missing url or endpoint_id: {task}")
 
+    cleanup_old_outputs(OUTPUT_DIR, "nuclei_*.jsonl")
     logger.info("Scanning %s", url)
+
+    # --- Resolve scope_root via FK chain: endpoint → subdomain → target ------
+    with db_conn() as conn:
+        scope_row = conn.execute(
+            """SELECT t.scope_root
+               FROM endpoints e
+               JOIN subdomains s ON s.id = e.subdomain_id
+               JOIN targets   t ON t.id = s.target_id
+               WHERE e.id = ?""",
+            (endpoint_id,),
+        ).fetchone()
+
+    scope_root = scope_row["scope_root"] if scope_row else ""
+
+    # --- Scope guard ----------------------------------------------------------
+    if scope_root:
+        parsed_host = urlparse(url).hostname or ""
+        if not is_in_scope(parsed_host, scope_root):
+            logger.warning(
+                "nuclei: out-of-scope endpoint skipped — host=%s scope=%s",
+                parsed_host, scope_root,
+            )
+            return
+
+    # --- Per-domain throttle --------------------------------------------------
+    if scope_root and NUCLEI_THROTTLE_SECS > 0:
+        throttle_key = f"throttle:nuclei:{scope_root}"
+        ttl = r.ttl(throttle_key)
+        if ttl > 0:
+            logger.info(
+                "nuclei throttle: waiting %ds before scanning %s (scope=%s)",
+                ttl, url, scope_root,
+            )
+            time.sleep(ttl)
 
     with db_conn() as conn:
         # TTL check — use last_scanned_at so clean endpoints aren't rescanned.
@@ -153,7 +192,7 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
             (url, WORKER_NAME),
         ).lastrowid
 
-    host = url.split("//")[-1].split("/")[0]
+    host = urlparse(url).hostname or url.split("//")[-1].split("/")[0]
     out_dir = os.path.join(OUTPUT_DIR, "nuclei", host)
     os.makedirs(out_dir, exist_ok=True)
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
@@ -220,6 +259,10 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                raw_output_path = ? WHERE id = ?""",
             (output_file, job_id),
         )
+
+    # Set per-domain throttle so consecutive scans against the same root are spaced out.
+    if scope_root and NUCLEI_THROTTLE_SECS > 0:
+        r.set(f"throttle:nuclei:{scope_root}", "1", ex=NUCLEI_THROTTLE_SECS)
 
     logger.info("Scan complete for %s", url)
 

@@ -44,6 +44,15 @@ SEVERITY_MIN        = os.environ.get("NUCLEI_SEVERITY_MIN", "medium")
 
 SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
+
+class RateLimitError(Exception):
+    """Raised when a notification channel responds with HTTP 429."""
+
+    def __init__(self, retry_after: int = 60):
+        self.retry_after = int(retry_after)
+        super().__init__(f"Rate limited — retry after {self.retry_after}s")
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
@@ -70,6 +79,12 @@ def _send_telegram(text: str) -> None:
         json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"},
         timeout=10,
     )
+    if resp.status_code == 429:
+        retry_after = (
+            resp.json().get("parameters", {}).get("retry_after", None)
+            or resp.headers.get("Retry-After", 60)
+        )
+        raise RateLimitError(retry_after)
     resp.raise_for_status()
 
 
@@ -81,6 +96,9 @@ def _send_discord(text: str) -> None:
         json={"content": text},
         timeout=10,
     )
+    if resp.status_code == 429:
+        retry_after = resp.headers.get("Retry-After", 60)
+        raise RateLimitError(retry_after)
     resp.raise_for_status()
 
 
@@ -113,7 +131,7 @@ def _record_notification(finding_id: int | None, channel: str) -> None:
         )
 
 
-def process_task(task: dict) -> None:
+def process_task(r: redis_lib.Redis, task: dict) -> None:
     notification_type = task.get("notification_type")
 
     if notification_type == "new_finding":
@@ -171,6 +189,18 @@ def process_task(task: dict) -> None:
         logger.warning("Unknown notification_type '%s' — discarding", notification_type)
 
 
+def _requeue_on_rate_limit(r: redis_lib.Redis, task: dict, retry_after: int) -> None:
+    """Re-enqueue *task* without incrementing retry_count, then sleep retry_after."""
+    requeue = {k: v for k, v in task.items() if k != "__raw__"}
+    requeue["retry_after"] = retry_after
+    from common.queue import enqueue as _enqueue
+    _enqueue(r, QUEUE, requeue)
+    logger.warning(
+        "Rate limited — re-enqueued task, sleeping %ds before acking", retry_after
+    )
+    time.sleep(retry_after)
+
+
 def record_failed_job(task: dict, reason: str) -> None:
     with db_conn() as conn:
         conn.execute(
@@ -200,7 +230,11 @@ def main():
                 continue
 
             try:
-                process_task(task)
+                process_task(r, task)
+                ack_task(r, PROCESSING, task)
+            except RateLimitError as exc:
+                # Do NOT increment retry_count — 429 is not a task failure.
+                _requeue_on_rate_limit(r, task, exc.retry_after)
                 ack_task(r, PROCESSING, task)
             except Exception as exc:
                 logger.error("Task failed: %s — %s", task, exc, exc_info=True)
