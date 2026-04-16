@@ -43,11 +43,38 @@ def wait_for_redis(max_attempts: int = 30, delay: float = 2.0) -> redis.Redis:
     raise RuntimeError("Could not connect to Redis after %d attempts" % max_attempts)
 
 
-def enqueue(r: redis.Redis, queue: str, payload: Dict[str, Any]) -> None:
-    """Push a new task to the left of the named queue list."""
+def enqueue(
+    r: redis.Redis,
+    queue: str,
+    payload: Dict[str, Any],
+    dedup_key: Optional[str] = None,
+    dedup_ttl_secs: int = 0,
+) -> bool:
+    """
+    Push a new task to the left of the named queue list.
+
+    Optional idempotency guard:
+      dedup_key      — a string that uniquely identifies this logical task
+                       (e.g. "recon_domain:example.com")
+      dedup_ttl_secs — how long (seconds) to suppress duplicate enqueues;
+                       0 means no guard (always push)
+
+    Returns True if the task was enqueued, False if it was suppressed as a
+    duplicate.  Callers that do not pass dedup_key always get True.
+    """
     if "retry_count" not in payload:
         payload["retry_count"] = 0
+
+    if dedup_key and dedup_ttl_secs > 0:
+        guard = f"inflight:{queue}:{dedup_key}"
+        # SET NX with TTL — only succeeds when no existing guard key
+        inserted = r.set(guard, "1", nx=True, ex=dedup_ttl_secs)
+        if not inserted:
+            logger.debug("Dedup suppressed task on %s (key=%s)", queue, dedup_key)
+            return False
+
     r.lpush(queue, json.dumps(payload))
+    return True
 
 
 def dequeue_blocking(

@@ -92,10 +92,16 @@ def _refresh_stale_targets() -> int:
         ).fetchall()
 
     r = get_r()
+    ttl = int(RECON_INTERVAL_HOURS * 3600)
     for row in rows:
-        enqueue(r, "recon_domain", {"domain": row["scope_root"]})
-        enqueued += 1
-        logger.info("Refresh enqueued for %s", row["scope_root"])
+        pushed = enqueue(
+            r, "recon_domain", {"domain": row["scope_root"]},
+            dedup_key=row["scope_root"],
+            dedup_ttl_secs=ttl,
+        )
+        if pushed:
+            enqueued += 1
+            logger.info("Refresh enqueued for %s", row["scope_root"])
     return enqueued
 
 
