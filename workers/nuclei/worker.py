@@ -148,13 +148,29 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
             logger.info("Skipping %s — scanned recently", url)
             return
 
+    with db_conn() as conn:
+        job_id = conn.execute(
+            """INSERT INTO jobs (type, target_ref, status, started_at, worker_name)
+               VALUES ('scan_http', ?, 'running', datetime('now'), ?)""",
+            (url, WORKER_NAME),
+        ).lastrowid
+
     host = url.split("//")[-1].split("/")[0]
     out_dir = os.path.join(OUTPUT_DIR, "nuclei", host)
     os.makedirs(out_dir, exist_ok=True)
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
     output_file = os.path.join(out_dir, f"nuclei_{ts}.jsonl")
 
-    findings = run_nuclei(url, output_file)
+    try:
+        findings = run_nuclei(url, output_file)
+    except Exception:
+        with db_conn() as conn:
+            conn.execute(
+                "UPDATE jobs SET status = 'failed', finished_at = datetime('now') WHERE id = ?",
+                (job_id,),
+            )
+        raise
+
     logger.info("nuclei: %d finding(s) for %s", len(findings), url)
 
     with db_conn() as conn:
@@ -192,6 +208,13 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                     "notification_type": "new_finding",
                     "finding_id": finding_id,
                 })
+
+    with db_conn() as conn:
+        conn.execute(
+            """UPDATE jobs SET status = 'done', finished_at = datetime('now'),
+               raw_output_path = ? WHERE id = ?""",
+            (output_file, job_id),
+        )
 
     logger.info("Scan complete for %s", url)
 
