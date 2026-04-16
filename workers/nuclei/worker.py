@@ -234,10 +234,9 @@ def record_failed_job(task: dict, reason: str) -> None:
 
 
 def _template_updater_loop():
-    """Background thread: refresh templates on the configured interval."""
+    """Background thread: refresh templates immediately, then on the configured interval."""
     interval_secs = TEMPLATE_UPDATE_HOURS * 3600
     while True:
-        time.sleep(interval_secs)
         logger.info("Updating Nuclei templates...")
         try:
             subprocess.run(
@@ -247,6 +246,7 @@ def _template_updater_loop():
             logger.info("Template update complete")
         except Exception as exc:
             logger.error("Template update failed: %s", exc)
+        time.sleep(interval_secs)
 
 
 def main():

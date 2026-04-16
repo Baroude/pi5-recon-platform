@@ -156,7 +156,7 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
 
     logger.info("Probing %s", hostname)
 
-    # Resolve subdomain_id from DB (may have been inserted by recon worker)
+    # Resolve subdomain_id from DB; insert if not yet committed by recon worker.
     with db_conn() as conn:
         sub_row = conn.execute(
             "SELECT id FROM subdomains WHERE target_id = ? AND hostname = ?",
@@ -164,8 +164,11 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
         ).fetchone()
 
         if not sub_row:
-            # Subdomain not yet in DB (edge case: task arrived before upsert committed)
-            time.sleep(2)
+            # Recon worker hasn't committed yet — insert so this worker is self-sufficient.
+            conn.execute(
+                "INSERT OR IGNORE INTO subdomains (target_id, hostname, source) VALUES (?, ?, 'httpx')",
+                (target_id, hostname),
+            )
             sub_row = conn.execute(
                 "SELECT id FROM subdomains WHERE target_id = ? AND hostname = ?",
                 (target_id, hostname),
@@ -174,18 +177,6 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                 raise ValueError(f"Subdomain not found in DB: {hostname}")
 
         subdomain_id = sub_row["id"]
-
-        # TTL check
-        recent = conn.execute(
-            """SELECT last_seen FROM endpoints
-               WHERE subdomain_id = ?
-                 AND last_seen > datetime('now', ? || ' hours')
-               LIMIT 1""",
-            (subdomain_id, f"-{HTTPX_INTERVAL_HOURS}"),
-        ).fetchone()
-        if recent:
-            logger.info("Skipping %s — probed recently", hostname)
-            return
 
     with db_conn() as conn:
         job_id = conn.execute(
@@ -227,8 +218,10 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
             chash      = _content_hash(rec)
 
             existing = conn.execute(
-                "SELECT id, content_hash, alive FROM endpoints WHERE url = ?",
-                (url,),
+                """SELECT id, content_hash, alive,
+                          (last_seen > datetime('now', ? || ' hours')) AS fresh
+                   FROM endpoints WHERE url = ?""",
+                (f"-{HTTPX_INTERVAL_HOURS}", url),
             ).fetchone()
 
             if existing:
@@ -244,8 +237,8 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                     (int(alive), status_code, title, tech, chash, existing["id"]),
                 )
                 endpoint_id = existing["id"]
-                # Only re-scan if something changed
-                if alive and changed:
+                # Re-scan if content changed or TTL has expired for this specific URL
+                if alive and (changed or not existing["fresh"]):
                     enqueue(r, NEXT_QUEUE, {"url": url, "endpoint_id": endpoint_id})
             else:
                 endpoint_id = conn.execute(

@@ -169,7 +169,17 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
     try:
         subfinder_found = run_subfinder(domain, output_file)
         amass_found     = run_amass_passive(domain, amass_output_file)
-        found = list({h for h in subfinder_found + amass_found if h})
+
+        # Build source map so each subdomain is attributed to the right tool(s).
+        source_map: dict[str, set[str]] = {}
+        for h in subfinder_found:
+            if h:
+                source_map.setdefault(h, set()).add("subfinder")
+        for h in amass_found:
+            if h:
+                source_map.setdefault(h, set()).add("amass")
+        found = list(source_map.keys())
+
         logger.info(
             "recon found %d hosts for %s (subfinder=%d, amass=%d)",
             len(found), domain, len(subfinder_found), len(amass_found),
@@ -187,6 +197,14 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                     (target_id, hostname),
                 ).fetchone()
 
+                tools = source_map.get(hostname, {"subfinder"})
+                if "subfinder" in tools and "amass" in tools:
+                    source = "subfinder,amass"
+                elif "amass" in tools:
+                    source = "amass"
+                else:
+                    source = "subfinder"
+
                 if existing:
                     conn.execute(
                         "UPDATE subdomains SET last_seen = datetime('now') WHERE id = ?",
@@ -194,8 +212,8 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                     )
                 else:
                     conn.execute(
-                        "INSERT INTO subdomains (target_id, hostname, source) VALUES (?, ?, 'subfinder')",
-                        (target_id, hostname),
+                        "INSERT INTO subdomains (target_id, hostname, source) VALUES (?, ?, ?)",
+                        (target_id, hostname, source),
                     )
                     new_count += 1
                     enqueue(r, NEXT_QUEUE, {
