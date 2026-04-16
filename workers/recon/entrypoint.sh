@@ -24,4 +24,18 @@ if [ -n "${SUBFINDER_CENSYS_API_ID:-}" ] && [ -n "${SUBFINDER_CENSYS_API_SECRET:
 fi
 
 echo "[entrypoint] Provider config written to $CFG_DIR/provider-config.yaml"
+
+# Write amass datasources config only when AMASS_SHODAN_API_KEY is provided.
+if [ -n "${AMASS_SHODAN_API_KEY:-}" ]; then
+    AMASS_CFG_DIR="/root/.config/amass"
+    mkdir -p "$AMASS_CFG_DIR"
+    cat > "$AMASS_CFG_DIR/datasources.yaml" <<EOF
+datasources:
+  - name: Shodan
+    creds:
+      - apikey: ${AMASS_SHODAN_API_KEY}
+EOF
+    echo "[entrypoint] Amass datasources config written to $AMASS_CFG_DIR/datasources.yaml"
+fi
+
 exec python3 /app/worker.py

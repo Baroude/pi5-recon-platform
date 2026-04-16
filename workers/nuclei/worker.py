@@ -137,12 +137,9 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
     logger.info("Scanning %s", url)
 
     with db_conn() as conn:
-        # TTL check
+        # TTL check — use last_scanned_at so clean endpoints aren't rescanned.
         recent = conn.execute(
-            """SELECT last_seen FROM findings
-               WHERE endpoint_id = ?
-                 AND last_seen > datetime('now', ? || ' hours')
-               LIMIT 1""",
+            "SELECT last_scanned_at FROM endpoints WHERE id = ? AND last_scanned_at > datetime('now', ? || ' hours')",
             (endpoint_id, f"-{NUCLEI_INTERVAL_HOURS}"),
         ).fetchone()
         if recent:
@@ -214,6 +211,10 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                 })
 
     with db_conn() as conn:
+        conn.execute(
+            "UPDATE endpoints SET last_scanned_at = datetime('now') WHERE id = ?",
+            (endpoint_id,),
+        )
         conn.execute(
             """UPDATE jobs SET status = 'done', finished_at = datetime('now'),
                raw_output_path = ? WHERE id = ?""",

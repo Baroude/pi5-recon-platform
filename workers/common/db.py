@@ -109,6 +109,14 @@ def init_db(path: str = None) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
     conn = sqlite3.connect(p)
     conn.executescript(SCHEMA_SQL)
+    # Add last_scanned_at to endpoints for nuclei TTL tracking (idempotent migration).
+    try:
+        conn.execute(
+            "ALTER TABLE endpoints ADD COLUMN last_scanned_at DATETIME"
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     conn.commit()
     conn.close()
     logger.info("DB ready: %s", p)
