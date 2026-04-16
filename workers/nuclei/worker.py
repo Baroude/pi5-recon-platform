@@ -74,8 +74,9 @@ def severity_meets_threshold(severity: str) -> bool:
     return SEVERITY_ORDER.get(severity.lower(), -1) >= SEVERITY_ORDER.get(SEVERITY_MIN.lower(), 2)
 
 
-def _dedupe_key(template_id: str, matched_at: str) -> str:
-    raw = f"{template_id}|{matched_at}"
+def _dedupe_key(template_id: str, url: str) -> str:
+    """Stable key: same template fired against the same canonical endpoint URL."""
+    raw = f"{template_id}|{url}"
     return hashlib.sha1(raw.encode()).hexdigest()
 
 
@@ -164,7 +165,10 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
             severity    = info.get("severity", "info").lower()
             title       = info.get("name", template_id)
             matched_at  = f.get("matched-at", url)
-            dedupe_key  = _dedupe_key(template_id, matched_at)
+            # Dedupe on template + canonical endpoint URL (stable across runs).
+            # matched_at is stored for reference but kept out of the key because
+            # it can vary (query-string order, redirect targets, etc.).
+            dedupe_key  = _dedupe_key(template_id, url)
 
             existing = conn.execute(
                 "SELECT id FROM findings WHERE dedupe_key = ?",
