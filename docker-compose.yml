@@ -34,8 +34,8 @@ services:
       redis-server
       --appendonly yes
       --appendfsync everysec
-      --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory 512mb
+      --maxmemory-policy volatile-lru
       --save ""
     volumes:
       - /opt/recon-platform/data/redis:/data
@@ -137,6 +137,7 @@ services:
       - NUCLEI_SEVERITY_MIN=${NUCLEI_SEVERITY_MIN:-medium}
       - MAX_NUCLEI_CONCURRENCY=${MAX_NUCLEI_CONCURRENCY:-1}
       - DEFAULT_NUCLEI_INTERVAL_HOURS=${DEFAULT_NUCLEI_INTERVAL_HOURS:-24}
+      - NUCLEI_THROTTLE_SECS=${NUCLEI_THROTTLE_SECS:-30}
     volumes:
       - /opt/recon-platform/data/db:/data/db
       - /opt/recon-platform/data/output:/data/output

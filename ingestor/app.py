@@ -11,6 +11,7 @@ Endpoints
   GET  /health               Liveness probe.
 """
 
+import json
 import logging
 import os
 import re
@@ -43,6 +44,9 @@ RECON_INTERVAL_HOURS = float(os.environ.get("DEFAULT_RECON_INTERVAL_HOURS", 24))
 app = FastAPI(title="Recon Platform Ingestor", version="1.0")
 
 _redis: Optional[redis_lib.Redis] = None
+_refresh_thread: Optional[threading.Thread] = None
+
+_DLQ_QUEUES = ["recon_domain", "probe_host", "scan_http", "notify_finding"]
 
 
 def get_r() -> redis_lib.Redis:
@@ -62,10 +66,11 @@ def get_r() -> redis_lib.Redis:
 
 @app.on_event("startup")
 def on_startup():
+    global _refresh_thread
     init_db()
     get_r()
-    t = threading.Thread(target=_refresh_loop, daemon=True)
-    t.start()
+    _refresh_thread = threading.Thread(target=_refresh_loop, daemon=True, name="refresh")
+    _refresh_thread.start()
     logger.info("Ingestor ready")
 
 
@@ -107,7 +112,7 @@ def _refresh_stale_targets() -> int:
 
 
 def _refresh_loop():
-    """Background thread: check for stale targets every hour."""
+    """Background thread: check for stale targets every hour, log DLQ depths."""
     while True:
         try:
             n = _refresh_stale_targets()
@@ -115,6 +120,17 @@ def _refresh_loop():
                 logger.info("Refresh cycle: enqueued %d target(s)", n)
         except Exception as exc:
             logger.error("Refresh cycle error: %s", exc)
+
+        # Log DLQ depths so operators can spot queue buildup in the logs.
+        try:
+            r = get_r()
+            for q in _DLQ_QUEUES:
+                depth = r.llen(f"dlq:{q}")
+                if depth:
+                    logger.warning("DLQ depth dlq:%s = %d", q, depth)
+        except Exception as exc:
+            logger.error("DLQ depth check failed: %s", exc)
+
         time.sleep(3600)
 
 
@@ -155,7 +171,43 @@ class TargetIn(BaseModel):
 
 @app.get("/health")
 def health():
+    issues = []
+    try:
+        get_r().ping()
+    except Exception as exc:
+        issues.append(f"redis: {exc}")
+    try:
+        with db_conn() as conn:
+            conn.execute("SELECT 1")
+    except Exception as exc:
+        issues.append(f"sqlite: {exc}")
+    if _refresh_thread is not None and not _refresh_thread.is_alive():
+        issues.append("refresh thread is not alive")
+    if issues:
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "unhealthy", "issues": issues},
+        )
     return {"status": "ok"}
+
+
+@app.get("/admin/dlq")
+def dlq_status():
+    """Return DLQ depths and the 10 most recent items for every known queue."""
+    r = get_r()
+    result = {}
+    for q in _DLQ_QUEUES:
+        key = f"dlq:{q}"
+        depth = r.llen(key)
+        raw_items = r.lrange(key, 0, 9)
+        parsed = []
+        for raw in raw_items:
+            try:
+                parsed.append(json.loads(raw))
+            except Exception:
+                parsed.append({"raw": raw})
+        result[q] = {"depth": depth, "recent": parsed}
+    return result
 
 
 @app.post("/targets", status_code=201)

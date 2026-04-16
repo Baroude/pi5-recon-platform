@@ -27,6 +27,7 @@ from datetime import datetime
 import redis as redis_lib
 
 sys.path.insert(0, "/app")
+from common.cleanup import cleanup_old_outputs
 from common.db import db_conn, init_db
 from common.queue import (
     ack_task,
@@ -128,6 +129,8 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
     if not domain:
         raise ValueError(f"Missing domain in task: {task}")
 
+    cleanup_old_outputs(OUTPUT_DIR, "subfinder_*.txt")
+    cleanup_old_outputs(OUTPUT_DIR, "amass_*.txt")
     logger.info("Processing recon for %s", domain)
 
     with db_conn() as conn:

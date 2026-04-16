@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import redis
@@ -131,23 +132,60 @@ def nack_task(
         return True
 
     dlq_key = f"{dlq_prefix}:{queue}"
+    task["dlq_pushed_at"] = datetime.now(timezone.utc).isoformat()
     r.lpush(dlq_key, json.dumps(task))
     logger.error("Task sent to DLQ %s after %d retries", dlq_key, retry_count)
     return False
 
 
-def recover_processing_queue(r: redis.Redis, queue: str, processing_queue: str) -> int:
+def recover_processing_queue(
+    r: redis.Redis,
+    queue: str,
+    processing_queue: str,
+    max_retries: int = 2,
+) -> int:
     """
     On worker startup, move any items stuck in the processing queue back to
-    the main queue so they are retried.  Tasks that repeatedly crash will
-    eventually exhaust retries and reach the DLQ through the normal nack path.
+    the main queue so they are retried, or to the DLQ if retries are exhausted.
+
+    Each recovered task has its retry_count incremented so that tasks which
+    repeatedly crash a worker eventually reach the DLQ rather than looping
+    forever.
+
+    Returns the number of tasks re-enqueued to the main queue (DLQ pushes are
+    not counted).
     """
-    count = 0
+    _max = int(os.environ.get("MAX_RETRIES", max_retries))
+    recovered = 0
+    dlq_count = 0
     while True:
-        item = r.rpoplpush(processing_queue, queue)
-        if item is None:
+        raw = r.rpop(processing_queue)
+        if raw is None:
             break
-        count += 1
-    if count:
-        logger.info("Recovered %d stuck tasks: %s → %s", count, processing_queue, queue)
-    return count
+        try:
+            task = json.loads(raw)
+            task.pop("__raw__", None)
+            retry_count = task.get("retry_count", 0) + 1
+            task["retry_count"] = retry_count
+            if retry_count >= _max:
+                dlq_key = f"dlq:{queue}"
+                task["dlq_pushed_at"] = datetime.now(timezone.utc).isoformat()
+                r.lpush(dlq_key, json.dumps(task))
+                dlq_count += 1
+                logger.warning(
+                    "Recovery: task exceeded max_retries — sent to %s", dlq_key
+                )
+            else:
+                r.rpush(queue, json.dumps(task))
+                recovered += 1
+        except (json.JSONDecodeError, Exception) as exc:
+            logger.error("Recovery: could not deserialize task, sending to dlq:%s — %s", queue, exc)
+            dlq_key = f"dlq:{queue}"
+            r.lpush(dlq_key, raw)
+            dlq_count += 1
+    if recovered or dlq_count:
+        logger.info(
+            "Recovery complete: %d task(s) → %s, %d → dlq:%s",
+            recovered, queue, dlq_count, queue,
+        )
+    return recovered
