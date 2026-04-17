@@ -73,7 +73,7 @@ services:
       - SERVER_CITIES=${MULLVAD_SERVER_CITIES:-Paris}
       - FIREWALL_OUTBOUND_SUBNETS=172.16.0.0/12
     healthcheck:
-      test: ["CMD", "/gluetun/healthcheck"]
+      test: ["CMD-SHELL", "ip link show tun0 | grep -q 'UP' && test -f /tmp/gluetun/ip"]
       interval: 30s
       timeout: 10s
       retries: 3
