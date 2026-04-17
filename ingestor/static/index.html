@@ -10,6 +10,7 @@
   :root {
     --bg: #0d1117;
     --surface: #161b22;
+    --surface-soft: #1c2128;
     --border: #30363d;
     --text: #e6edf3;
     --muted: #8b949e;
@@ -23,9 +24,9 @@
   body {
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: "Segoe UI", Tahoma, sans-serif;
     font-size: 14px;
-    line-height: 1.5;
+    line-height: 1.45;
   }
 
   header {
@@ -49,52 +50,79 @@
     background: var(--muted);
     flex-shrink: 0;
   }
+
   .status-dot.ok { background: var(--green); }
   .status-dot.err { background: var(--red); }
 
   .refresh-info { margin-left: auto; color: var(--muted); font-size: 12px; }
 
   main {
-    max-width: 1450px;
+    max-width: 1500px;
     margin: 0 auto;
-    padding: 24px;
+    padding: 20px;
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: 16px;
   }
 
-  .add-form {
+  .panel {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 16px 20px;
+    padding: 14px;
     display: flex;
-    gap: 10px;
-    align-items: flex-end;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 12px;
   }
 
-  .add-form label {
+  .panel-row {
+    display: grid;
+    gap: 10px;
+    align-items: end;
+  }
+
+  .grid-add { grid-template-columns: 1.6fr 1.4fr 0.9fr 1fr auto; }
+  .grid-controls { grid-template-columns: repeat(4, minmax(140px, 1fr)) auto auto; }
+
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-soft);
+  }
+
+  label.control {
     display: flex;
     flex-direction: column;
     gap: 4px;
     color: var(--muted);
     font-size: 12px;
-    flex: 1;
-    min-width: 200px;
+    min-width: 120px;
   }
 
-  .add-form input[type=text] {
+  .inline-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  input[type=text], input[type=number], select {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 6px;
     color: var(--text);
-    padding: 7px 10px;
-    font-size: 14px;
+    padding: 7px 9px;
+    font-size: 13px;
     width: 100%;
     outline: none;
   }
-  .add-form input:focus { border-color: var(--accent); }
+
+  input:focus, select:focus { border-color: var(--accent); }
+  input[type=checkbox] { accent-color: var(--accent); }
 
   button {
     background: var(--accent);
@@ -104,29 +132,72 @@
     cursor: pointer;
     font-size: 13px;
     font-weight: 600;
-    padding: 8px 16px;
+    padding: 8px 12px;
     white-space: nowrap;
   }
-  button:hover { opacity: .86; }
-  button.danger { background: var(--red); }
-  button.sm { padding: 4px 10px; font-size: 12px; font-weight: 500; }
 
-  .form-msg { font-size: 13px; align-self: center; }
+  button:hover { opacity: .88; }
+  button.sm { padding: 4px 9px; font-size: 12px; font-weight: 500; }
+  button.danger { background: var(--red); }
+  button.alt { background: #355a84; }
+  button.ghost { background: #2a3038; }
+
+  .hint { color: var(--muted); font-size: 12px; }
+  .form-msg { font-size: 13px; }
   .form-msg.ok { color: var(--green); }
   .form-msg.err { color: var(--red); }
 
+  .stale {
+    border: 1px solid #5c3b06;
+    border-radius: 8px;
+    background: #2b2108;
+    color: #f7ce7a;
+    padding: 9px 12px;
+    font-size: 13px;
+  }
+
+  .hidden { display: none; }
+
+  .telemetry {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 10px;
+  }
+
+  .telemetry-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+
+  .telemetry-title {
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+  }
+
+  .telemetry-value {
+    margin-top: 4px;
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .telemetry-sub { margin-top: 3px; color: var(--muted); font-size: 12px; }
+
   .kpis {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 10px;
   }
 
   .kpi-card {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 12px 14px;
-    min-height: 90px;
+    padding: 12px;
+    min-height: 86px;
   }
 
   .kpi-title {
@@ -134,20 +205,11 @@
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: .5px;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
   }
 
-  .kpi-value {
-    font-size: 26px;
-    font-weight: 700;
-    line-height: 1.1;
-  }
-
-  .kpi-sub {
-    margin-top: 5px;
-    color: var(--muted);
-    font-size: 12px;
-  }
+  .kpi-value { font-size: 25px; font-weight: 700; line-height: 1.1; }
+  .kpi-sub { margin-top: 4px; color: var(--muted); font-size: 12px; }
 
   section {
     background: var(--surface);
@@ -159,7 +221,7 @@
   section h2 {
     font-size: 13px;
     font-weight: 600;
-    padding: 12px 16px;
+    padding: 11px 14px;
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
@@ -167,13 +229,13 @@
   }
 
   section h2 .count {
+    margin-left: auto;
     background: var(--border);
     border-radius: 10px;
     font-size: 11px;
     padding: 1px 7px;
     font-weight: 500;
     color: var(--muted);
-    margin-left: auto;
   }
 
   .tbl-wrap { overflow-x: auto; }
@@ -185,16 +247,16 @@
     font-size: 11px;
     font-weight: 600;
     letter-spacing: .4px;
-    padding: 8px 12px;
+    padding: 8px 10px;
     text-align: left;
     text-transform: uppercase;
     white-space: nowrap;
   }
 
   tbody tr { border-top: 1px solid var(--border); }
-  tbody tr:hover { background: #1c2128; }
-  td { padding: 8px 12px; vertical-align: middle; }
-  td.mono { font-family: "SF Mono", "Fira Code", monospace; font-size: 12px; }
+  tbody tr:hover { background: var(--surface-soft); }
+  td { padding: 8px 10px; vertical-align: middle; }
+  td.mono { font-family: "SF Mono", "Consolas", monospace; font-size: 12px; }
 
   .badge {
     border-radius: 4px;
@@ -204,32 +266,27 @@
     text-transform: uppercase;
     display: inline-block;
   }
+
   .badge.critical { background: #4a1818; color: var(--red); }
-  .badge.high     { background: #3d2010; color: var(--orange); }
-  .badge.medium   { background: #3d2f00; color: var(--yellow); }
-  .badge.low      { background: #112a18; color: var(--green); }
-  .badge.info     { background: #112244; color: var(--accent); }
-
-  .badge.done,
-  .badge.enabled,
-  .badge.ok { background: #112a18; color: var(--green); }
-
-  .badge.failed,
-  .badge.err,
-  .badge.disabled { background: #4a1818; color: var(--red); }
-
+  .badge.high { background: #3d2010; color: var(--orange); }
+  .badge.medium { background: #3d2f00; color: var(--yellow); }
+  .badge.low { background: #112a18; color: var(--green); }
+  .badge.info { background: #112244; color: var(--accent); }
+  .badge.done, .badge.enabled, .badge.ok { background: #112a18; color: var(--green); }
+  .badge.failed, .badge.err, .badge.disabled { background: #4a1818; color: var(--red); }
   .badge.running { background: #112244; color: var(--accent); }
   .badge.pending { background: #2a2f36; color: var(--muted); }
 
   .stack {
     display: flex;
-    width: 160px;
+    width: 150px;
     height: 7px;
     border-radius: 99px;
     overflow: hidden;
     background: #242b34;
-    margin-top: 4px;
+    margin-top: 3px;
   }
+
   .stack > span { display: block; height: 100%; }
   .stack .done { background: var(--green); }
   .stack .running { background: var(--accent); }
@@ -237,32 +294,38 @@
   .stack .pending { background: #4e5968; }
 
   .muted { color: var(--muted); }
+  .target-config { display: flex; flex-direction: column; gap: 6px; min-width: 180px; }
 
-  .dlq-list { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .dlq-list { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
   .dlq-item {
     background: #1c1010;
     border: 1px solid #4a1818;
     border-radius: 6px;
-    padding: 8px 12px;
-    font-family: "SF Mono", "Fira Code", monospace;
+    padding: 8px 10px;
+    font-family: "SF Mono", "Consolas", monospace;
     font-size: 12px;
     color: #f8a0a0;
     white-space: pre-wrap;
-    word-break: break-all;
+    word-break: break-word;
   }
-  .dlq-empty { padding: 12px 16px; color: var(--muted); font-size: 13px; }
+
+  .dlq-empty { padding: 12px 14px; color: var(--muted); font-size: 13px; }
 
   .empty-row td {
     color: var(--muted);
     font-style: italic;
     text-align: center;
-    padding: 24px;
+    padding: 20px;
   }
 
-  @media (max-width: 900px) {
+  @media (max-width: 1080px) {
     main { padding: 12px; }
-    .kpi-card { min-height: 74px; }
-    .kpi-value { font-size: 22px; }
+    .grid-add, .grid-controls { grid-template-columns: 1fr 1fr; }
+    .kpi-value, .telemetry-value { font-size: 21px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { scroll-behavior: auto !important; }
   }
 </style>
 </head>
@@ -275,19 +338,55 @@
 </header>
 
 <main>
-  <div class="add-form">
-    <label>
-      Add target
-      <input type="text" id="new-domain" placeholder="example.com" autocomplete="off" spellcheck="false">
-    </label>
-    <label>
-      Notes (optional)
-      <input type="text" id="new-notes" placeholder="Bug bounty program">
-    </label>
-    <button onclick="addTarget()">+ Add Target</button>
-    <span class="form-msg" id="form-msg"></span>
+  <div class="panel">
+    <div class="panel-row grid-add">
+      <label class="control">
+        Add target
+        <input type="text" id="new-domain" placeholder="example.com" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="control">
+        Notes (optional)
+        <input type="text" id="new-notes" placeholder="Bug bounty program">
+      </label>
+      <label class="control">
+        Active recon
+        <span class="inline-check"><input type="checkbox" id="new-active-recon"> enable brute-domain stage</span>
+      </label>
+      <label class="control">
+        Brute wordlist
+        <select id="new-brute-wordlist"></select>
+      </label>
+      <button id="btn-add-target">+ Add Target</button>
+    </div>
+
+    <div class="panel-row grid-controls">
+      <label class="control">
+        Window (hours)
+        <input type="number" id="ctl-window-hours" min="1" max="168" step="1">
+      </label>
+      <label class="control">
+        Target limit
+        <input type="number" id="ctl-target-limit" min="1" max="500" step="1">
+      </label>
+      <label class="control">
+        Recent job limit
+        <input type="number" id="ctl-recent-job-limit" min="5" max="200" step="1">
+      </label>
+      <label class="control">
+        Refresh (sec)
+        <input type="number" id="ctl-refresh-secs" min="2" max="60" step="1">
+      </label>
+      <button id="btn-apply-controls" class="alt">Apply Controls</button>
+      <button id="btn-refresh-now" class="ghost">Refresh Now</button>
+    </div>
+
+    <div class="hint" id="controls-hint"></div>
+    <div class="form-msg" id="form-msg"></div>
   </div>
 
+  <div class="stale hidden" id="stale-banner"></div>
+
+  <div class="telemetry" id="telemetry"></div>
   <div class="kpis" id="kpis"></div>
 
   <section>
@@ -299,6 +398,8 @@
           <th>Queue</th>
           <th>Jobs (Window)</th>
           <th>Jobs (All Time)</th>
+          <th>Done/h</th>
+          <th>Queue ETA</th>
           <th>Success</th>
           <th>Last Success</th>
           <th>Last Failure</th>
@@ -315,14 +416,15 @@
         <thead><tr>
           <th>Domain</th>
           <th>Status</th>
-          <th>Recon</th>
+          <th>Config</th>
+          <th>Next Recon</th>
           <th>Recon (Window)</th>
           <th>Subdomains</th>
           <th>Live Endpoints</th>
           <th>Findings</th>
           <th>Last Activity</th>
           <th>Notes</th>
-          <th></th>
+          <th>Actions</th>
         </tr></thead>
         <tbody id="targets-tbody"></tbody>
       </table>
@@ -331,6 +433,31 @@
 
   <section>
     <h2>Recent Jobs <span class="count" id="jobs-count">0</span></h2>
+    <div class="toolbar">
+      <label class="control">
+        Status
+        <select id="jobs-filter-status">
+          <option value="all">all</option>
+          <option value="pending">pending</option>
+          <option value="running">running</option>
+          <option value="done">done</option>
+          <option value="failed">failed</option>
+        </select>
+      </label>
+      <label class="control">
+        Type
+        <select id="jobs-filter-type"></select>
+      </label>
+      <label class="control" style="min-width:230px">
+        Target contains
+        <input type="text" id="jobs-filter-target" placeholder="example.com">
+      </label>
+      <label class="control">
+        Running only
+        <span class="inline-check"><input type="checkbox" id="jobs-filter-running"> include only running jobs</span>
+      </label>
+      <button class="sm ghost" id="jobs-filter-clear">Clear</button>
+    </div>
     <div class="tbl-wrap">
       <table>
         <thead><tr>
@@ -356,12 +483,36 @@
 
   <section>
     <h2>Findings <span class="count" id="findings-count">0</span></h2>
+    <div class="toolbar">
+      <label class="control">
+        Severity
+        <select id="findings-filter-severity">
+          <option value="all">all</option>
+          <option value="critical">critical</option>
+          <option value="high">high</option>
+          <option value="medium">medium</option>
+          <option value="low">low</option>
+          <option value="info">info</option>
+        </select>
+      </label>
+      <label class="control">
+        Target
+        <select id="findings-filter-target"></select>
+      </label>
+      <label class="control">
+        Window (hours)
+        <input type="number" id="findings-filter-window" min="1" max="168" step="1">
+      </label>
+      <button class="sm alt" id="findings-filter-apply">Apply</button>
+      <button class="sm ghost" id="findings-filter-clear">Clear</button>
+    </div>
     <div class="tbl-wrap">
       <table>
         <thead><tr>
           <th>Severity</th>
           <th>Title</th>
           <th>Host</th>
+          <th>Target</th>
           <th>URL</th>
           <th>First Seen</th>
         </tr></thead>
@@ -389,12 +540,58 @@
 
 <script>
 const BASE = window.location.origin;
+const LS_KEY = "recon_dash_v2";
 
+const STAGE_ORDER = ["recon_domain", "brute_domain", "probe_host", "scan_http", "notify_finding"];
 const STAGE_LABELS = {
   recon_domain: "Recon",
+  brute_domain: "DNS Brute",
   probe_host: "HTTPX",
   scan_http: "Nuclei",
   notify_finding: "Notify",
+};
+
+const DEFAULTS = {
+  window_hours: 24,
+  target_limit: 200,
+  recent_job_limit: 60,
+  refresh_interval_secs: 5,
+  findings_window_hours: 24,
+};
+
+const BOUNDS = {
+  window_hours: { min: 1, max: 168 },
+  target_limit: { min: 1, max: 500 },
+  recent_job_limit: { min: 5, max: 200 },
+  refresh_interval_secs: { min: 2, max: 60 },
+  findings_window_hours: { min: 1, max: 168 },
+};
+
+const state = {
+  meta: null,
+  controls: null,
+  findingsFilters: {
+    severity: "all",
+    target_id: "all",
+    window_hours: DEFAULTS.findings_window_hours,
+  },
+  jobsFilters: {
+    status: "all",
+    type: "all",
+    target_contains: "",
+    running_only: false,
+  },
+  progress: null,
+  findings: [],
+  subdomains: [],
+  dlq: null,
+  lastFetchAt: null,
+  lastFetchDurationMs: 0,
+  inFlight: false,
+  failCount: 0,
+  pollTimer: null,
+  tickerTimer: null,
+  nextRefreshAt: 0,
 };
 
 function parseTs(s) {
@@ -411,7 +608,7 @@ function relTs(s) {
   const d = parseTs(s);
   if (!d) return "-";
   const diff = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (diff < 0) return "just now";
+  if (diff < 0) return "in future";
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
@@ -435,9 +632,8 @@ function num(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function statusBadge(status) {
-  const s = (status || "pending").toLowerCase();
-  return `<span class="badge ${esc(s)}">${esc(s)}</span>`;
+function clamp(n, min, max) {
+  return Math.min(max, Math.max(min, n));
 }
 
 function fmtPct(n) {
@@ -445,20 +641,137 @@ function fmtPct(n) {
   return `${Math.round(n)}%`;
 }
 
+function fmtFixed(v) {
+  const n = num(v);
+  return n.toFixed(2);
+}
+
+function formatDurationSeconds(sec) {
+  const s = Math.max(0, Math.floor(sec));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
 function duration(started, finished) {
   const s = parseTs(started);
   if (!s) return "-";
   const e = parseTs(finished) || new Date();
-  const sec = Math.max(0, Math.floor((e.getTime() - s.getTime()) / 1000));
-  if (sec < 60) return `${sec}s`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  return `${h}h ${m}m`;
+  return formatDurationSeconds((e.getTime() - s.getTime()) / 1000);
 }
 
-async function apiFetch(path) {
-  const r = await fetch(BASE + path);
+function statusBadge(status) {
+  const s = (status || "pending").toLowerCase();
+  return `<span class="badge ${esc(s)}">${esc(s)}</span>`;
+}
+
+function stackBar(done, running, failed, pending) {
+  const total = done + running + failed + pending;
+  if (!total) return '<div class="stack"></div>';
+  const wDone = Math.round((done / total) * 100);
+  const wRun = Math.round((running / total) * 100);
+  const wFail = Math.round((failed / total) * 100);
+  const wPend = Math.max(0, 100 - wDone - wRun - wFail);
+  return `
+    <div class="stack" title="done=${done}, running=${running}, failed=${failed}, pending=${pending}">
+      <span class="done" style="width:${wDone}%"></span>
+      <span class="running" style="width:${wRun}%"></span>
+      <span class="failed" style="width:${wFail}%"></span>
+      <span class="pending" style="width:${wPend}%"></span>
+    </div>
+  `;
+}
+
+function nextReconText(nextDueAt, overdue) {
+  const due = parseTs(nextDueAt);
+  if (!due) return "-";
+  const secs = Math.floor((due.getTime() - Date.now()) / 1000);
+  if (overdue || secs < 0) return `${formatDurationSeconds(Math.abs(secs))} overdue`;
+  return `in ${formatDurationSeconds(secs)}`;
+}
+
+function queueEta(depth, donePerHour) {
+  const dph = num(donePerHour);
+  if (depth <= 0) return "-";
+  if (dph <= 0) return "stalled";
+  const etaSecs = (depth / dph) * 3600;
+  return `~${formatDurationSeconds(etaSecs)}`;
+}
+
+function loadSavedControls() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
+    return {
+      window_hours: num(parsed.window_hours) || DEFAULTS.window_hours,
+      target_limit: num(parsed.target_limit) || DEFAULTS.target_limit,
+      recent_job_limit: num(parsed.recent_job_limit) || DEFAULTS.recent_job_limit,
+      refresh_interval_secs: num(parsed.refresh_interval_secs) || DEFAULTS.refresh_interval_secs,
+      findings_window_hours: num(parsed.findings_window_hours) || DEFAULTS.findings_window_hours,
+    };
+  } catch {
+    return { ...DEFAULTS };
+  }
+}
+
+function saveControls() {
+  localStorage.setItem(LS_KEY, JSON.stringify(state.controls));
+}
+
+function applyBounds() {
+  state.controls.window_hours = clamp(Math.round(num(state.controls.window_hours)), BOUNDS.window_hours.min, BOUNDS.window_hours.max);
+  state.controls.target_limit = clamp(Math.round(num(state.controls.target_limit)), BOUNDS.target_limit.min, BOUNDS.target_limit.max);
+  state.controls.recent_job_limit = clamp(Math.round(num(state.controls.recent_job_limit)), BOUNDS.recent_job_limit.min, BOUNDS.recent_job_limit.max);
+  state.controls.refresh_interval_secs = clamp(Math.round(num(state.controls.refresh_interval_secs)), BOUNDS.refresh_interval_secs.min, BOUNDS.refresh_interval_secs.max);
+  state.controls.findings_window_hours = clamp(Math.round(num(state.controls.findings_window_hours)), BOUNDS.findings_window_hours.min, BOUNDS.findings_window_hours.max);
+}
+
+function setControlsToDom() {
+  document.getElementById("ctl-window-hours").value = state.controls.window_hours;
+  document.getElementById("ctl-target-limit").value = state.controls.target_limit;
+  document.getElementById("ctl-recent-job-limit").value = state.controls.recent_job_limit;
+  document.getElementById("ctl-refresh-secs").value = state.controls.refresh_interval_secs;
+  document.getElementById("findings-filter-window").value = state.findingsFilters.window_hours;
+}
+
+function readControlsFromDom() {
+  state.controls.window_hours = num(document.getElementById("ctl-window-hours").value);
+  state.controls.target_limit = num(document.getElementById("ctl-target-limit").value);
+  state.controls.recent_job_limit = num(document.getElementById("ctl-recent-job-limit").value);
+  state.controls.refresh_interval_secs = num(document.getElementById("ctl-refresh-secs").value);
+  state.controls.findings_window_hours = num(document.getElementById("findings-filter-window").value);
+  applyBounds();
+  state.findingsFilters.window_hours = state.controls.findings_window_hours;
+  saveControls();
+  setControlsToDom();
+}
+
+function renderControlsHint() {
+  const hint = document.getElementById("controls-hint");
+  hint.textContent = `Polling every ${state.controls.refresh_interval_secs}s. Window=${state.controls.window_hours}h, targets=${state.controls.target_limit}, recent jobs=${state.controls.recent_job_limit}.`;
+}
+
+function showFormMsg(kind, text) {
+  const msg = document.getElementById("form-msg");
+  msg.className = `form-msg ${kind}`;
+  msg.textContent = text;
+}
+
+function buildProgressPath() {
+  return `/admin/progress?target_limit=${state.controls.target_limit}&recent_job_limit=${state.controls.recent_job_limit}&window_hours=${state.controls.window_hours}`;
+}
+
+function buildFindingsPath() {
+  const params = new URLSearchParams({ limit: "150" });
+  if (state.findingsFilters.severity !== "all") params.set("severity", state.findingsFilters.severity);
+  if (state.findingsFilters.target_id !== "all") params.set("target_id", state.findingsFilters.target_id);
+  params.set("window_hours", String(state.findingsFilters.window_hours));
+  return `/findings?${params.toString()}`;
+}
+
+async function apiFetch(path, options = null) {
+  const r = await fetch(BASE + path, options || undefined);
   if (!r.ok) {
     let detail = r.statusText;
     try {
@@ -469,6 +782,7 @@ async function apiFetch(path) {
     }
     throw new Error(detail || `HTTP ${r.status}`);
   }
+  if (r.status === 204) return null;
   return r.json();
 }
 
@@ -480,6 +794,65 @@ async function refreshHealth() {
   } catch {
     dot.className = "status-dot err";
   }
+}
+
+function renderWordlistOptions(targetSelectId, selectedValue) {
+  const el = document.getElementById(targetSelectId);
+  const wordlists = state.meta?.allowed_wordlists || ["dns-small.txt", "dns-medium.txt", "dns-large.txt"];
+  el.innerHTML = wordlists.map((wl) => `<option value="${escAttr(wl)}" ${wl === selectedValue ? "selected" : ""}>${esc(wl)}</option>`).join("");
+}
+
+function renderJobsTypeOptions() {
+  const el = document.getElementById("jobs-filter-type");
+  el.innerHTML = [
+    '<option value="all">all</option>',
+    ...STAGE_ORDER.map((s) => `<option value="${escAttr(s)}">${esc(s)}</option>`),
+  ].join("");
+}
+
+function renderTelemetry(progress, dlqTotal) {
+  const o = progress.overview || {};
+  const running = num(o.jobs_running);
+  const oldestRunning = relTs(o.oldest_running_started_at);
+  const lastFinished = relTs(o.last_job_finished_at);
+
+  let queuePending = 0;
+  let queueProcessing = 0;
+  Object.values(progress.pipeline || {}).forEach((stage) => {
+    queuePending += num(stage.queue?.pending);
+    queueProcessing += num(stage.queue?.processing);
+  });
+
+  const cards = [
+    {
+      title: "Running Jobs",
+      value: `${running}`,
+      sub: `oldest started ${oldestRunning}`,
+    },
+    {
+      title: "Last Completion",
+      value: `${lastFinished}`,
+      sub: `finished at ${ts(o.last_job_finished_at)}`,
+    },
+    {
+      title: "Queue Pressure",
+      value: `${queuePending + queueProcessing}`,
+      sub: `${queuePending} pending / ${queueProcessing} processing`,
+    },
+    {
+      title: "DLQ Items",
+      value: `${num(dlqTotal)}`,
+      sub: "across all pipeline queues",
+    },
+  ];
+
+  document.getElementById("telemetry").innerHTML = cards.map((c) => `
+    <div class="telemetry-card">
+      <div class="telemetry-title">${esc(c.title)}</div>
+      <div class="telemetry-value">${esc(c.value)}</div>
+      <div class="telemetry-sub">${esc(c.sub)}</div>
+    </div>
+  `).join("");
 }
 
 function renderKpis(progress) {
@@ -504,7 +877,7 @@ function renderKpis(progress) {
     {
       title: "Subdomains",
       value: `${num(o.subdomains_total)}`,
-      sub: "Discovered in database",
+      sub: "discovered in database",
     },
     {
       title: "Live Endpoints",
@@ -519,7 +892,7 @@ function renderKpis(progress) {
     {
       title: "Running Jobs",
       value: `${num(o.jobs_running)}`,
-      sub: `${queuePending} pending in queues`,
+      sub: `${queuePending} pending`,
     },
     {
       title: "Queue Pressure",
@@ -537,32 +910,14 @@ function renderKpis(progress) {
   `).join("");
 }
 
-function stackBar(done, running, failed, pending) {
-  const total = done + running + failed + pending;
-  if (!total) return '<div class="stack"></div>';
-  const wDone = Math.round((done / total) * 100);
-  const wRun = Math.round((running / total) * 100);
-  const wFail = Math.round((failed / total) * 100);
-  const wPend = Math.max(0, 100 - wDone - wRun - wFail);
-  return `
-    <div class="stack" title="done=${done}, running=${running}, failed=${failed}, pending=${pending}">
-      <span class="done" style="width:${wDone}%"></span>
-      <span class="running" style="width:${wRun}%"></span>
-      <span class="failed" style="width:${wFail}%"></span>
-      <span class="pending" style="width:${wPend}%"></span>
-    </div>
-  `;
-}
-
 function renderPipeline(progress) {
-  const windowHours = num(progress.window_hours) || 24;
+  const windowHours = num(progress.window_hours) || state.controls.window_hours;
   document.getElementById("pipeline-window").textContent = `${windowHours}h`;
 
   const data = progress.pipeline || {};
-  const keys = ["recon_domain", "probe_host", "scan_http", "notify_finding"];
   const tbody = document.getElementById("pipeline-tbody");
 
-  const rows = keys.map((key) => {
+  const rows = STAGE_ORDER.map((key) => {
     const row = data[key] || {};
     const q = row.queue || {};
     const w = row.window || {};
@@ -576,10 +931,10 @@ function renderPipeline(progress) {
     const allRunning = num(a.running);
     const allFailed = num(a.failed);
     const allPending = num(a.pending);
+    const donePerHour = num(row.done_per_hour_window);
 
-    const success = (winDone + winFailed) > 0
-      ? (100 * winDone / (winDone + winFailed))
-      : null;
+    const success = (winDone + winFailed) > 0 ? (100 * winDone / (winDone + winFailed)) : null;
+    const depth = num(q.pending) + num(q.processing);
 
     return `
       <tr>
@@ -590,9 +945,11 @@ function renderPipeline(progress) {
           ${stackBar(winDone, winRunning, winFailed, winPending)}
         </td>
         <td class="mono">done ${allDone} / run ${allRunning} / fail ${allFailed} / pend ${allPending}</td>
+        <td class="mono">${fmtFixed(donePerHour)}</td>
+        <td class="mono">${esc(queueEta(depth, donePerHour))}</td>
         <td>${success == null ? '<span class="muted">-</span>' : fmtPct(success)}</td>
-        <td class="muted" title="${esc(ts(row.last_done_at))}">${esc(relTs(row.last_done_at))}</td>
-        <td class="muted" title="${esc(ts(row.last_failed_at))}">${esc(relTs(row.last_failed_at))}</td>
+        <td><span class="muted js-rel" data-ts="${escAttr(row.last_done_at || "")}" title="${escAttr(ts(row.last_done_at))}">${esc(relTs(row.last_done_at))}</span></td>
+        <td><span class="muted js-rel" data-ts="${escAttr(row.last_failed_at || "")}" title="${escAttr(ts(row.last_failed_at))}">${esc(relTs(row.last_failed_at))}</span></td>
       </tr>
     `;
   });
@@ -600,47 +957,107 @@ function renderPipeline(progress) {
   tbody.innerHTML = rows.join("");
 }
 
+function targetsWordlistOptions(selected) {
+  const wordlists = state.meta?.allowed_wordlists || ["dns-small.txt", "dns-medium.txt", "dns-large.txt"];
+  return wordlists.map((wl) => `<option value="${escAttr(wl)}" ${wl === selected ? "selected" : ""}>${esc(wl)}</option>`).join("");
+}
+
 function renderTargets(progress) {
   const rows = progress.targets || [];
-  document.getElementById("targets-count").textContent = rows.length;
+  document.getElementById("targets-count").textContent = `${rows.length}`;
   const tbody = document.getElementById("targets-tbody");
 
   if (!rows.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No targets yet. Add one above.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">No targets yet. Add one above.</td></tr>';
     return;
   }
 
-  tbody.innerHTML = rows.map((r) => `
-    <tr>
-      <td class="mono">${esc(r.scope_root)}</td>
-      <td>${r.enabled ? '<span class="badge enabled">active</span>' : '<span class="badge disabled">disabled</span>'}</td>
-      <td class="muted" title="${esc(ts(r.last_recon))}">${esc(relTs(r.last_recon))}</td>
-      <td class="mono">${num(r.recon_done_window)}</td>
-      <td class="mono">${num(r.subdomain_count)}</td>
-      <td class="mono">${num(r.live_endpoint_count)}</td>
-      <td class="mono">${num(r.finding_count)}</td>
-      <td class="muted" title="${esc(ts(r.last_activity))}">${esc(relTs(r.last_activity))}</td>
-      <td class="muted">${esc(r.notes) || '-'}</td>
-      <td>${r.enabled ? `<button class="sm danger js-disable" data-id="${num(r.id)}" data-domain="${escAttr(r.scope_root)}">Remove</button>` : ''}</td>
-    </tr>
-  `).join("");
+  tbody.innerHTML = rows.map((r) => {
+    const enabled = !!r.enabled;
+    const nextRecon = nextReconText(r.next_recon_due_at, !!r.is_recon_overdue);
+    return `
+      <tr>
+        <td class="mono">${esc(r.scope_root)}</td>
+        <td>${enabled ? '<span class="badge enabled">active</span>' : '<span class="badge disabled">disabled</span>'}</td>
+        <td>
+          <div class="target-config">
+            <label class="inline-check"><input type="checkbox" class="js-target-active" data-id="${num(r.id)}" ${r.active_recon ? "checked" : ""} ${enabled ? "" : "disabled"}>active recon</label>
+            <select class="js-target-wordlist" data-id="${num(r.id)}" ${enabled ? "" : "disabled"}>${targetsWordlistOptions(r.brute_wordlist || "dns-small.txt")}</select>
+          </div>
+        </td>
+        <td>
+          <span class="mono js-next-recon ${r.is_recon_overdue ? "" : "muted"}" data-due="${escAttr(r.next_recon_due_at || "")}" data-overdue="${r.is_recon_overdue ? "1" : "0"}" title="${escAttr(ts(r.next_recon_due_at))}">${esc(nextRecon)}</span>
+        </td>
+        <td class="mono">${num(r.recon_done_window)}</td>
+        <td class="mono">${num(r.subdomain_count)}</td>
+        <td class="mono">${num(r.live_endpoint_count)}</td>
+        <td class="mono">${num(r.finding_count)}</td>
+        <td><span class="muted js-rel" data-ts="${escAttr(r.last_activity || "")}" title="${escAttr(ts(r.last_activity))}">${esc(relTs(r.last_activity))}</span></td>
+        <td class="muted">${esc(r.notes) || "-"}</td>
+        <td>
+          ${enabled ? `<button class="sm alt js-run-now" data-id="${num(r.id)}" data-domain="${escAttr(r.scope_root)}">Run now</button> <button class="sm danger js-disable" data-id="${num(r.id)}" data-domain="${escAttr(r.scope_root)}">Disable</button>` : ""}
+        </td>
+      </tr>
+    `;
+  }).join("");
 
   document.querySelectorAll(".js-disable").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       const id = Number(btn.dataset.id);
       const domain = btn.dataset.domain || "";
-      disableTarget(id, domain);
+      await disableTarget(id, domain);
+    });
+  });
+
+  document.querySelectorAll(".js-run-now").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = Number(btn.dataset.id);
+      await runTargetNow(id);
+    });
+  });
+
+  document.querySelectorAll(".js-target-active").forEach((el) => {
+    el.addEventListener("change", async () => {
+      const id = Number(el.dataset.id);
+      await patchTarget(id, { active_recon: !!el.checked });
+    });
+  });
+
+  document.querySelectorAll(".js-target-wordlist").forEach((el) => {
+    el.addEventListener("change", async () => {
+      const id = Number(el.dataset.id);
+      await patchTarget(id, { brute_wordlist: el.value });
     });
   });
 }
 
+function applyJobsFilters(rows) {
+  const status = state.jobsFilters.status;
+  const type = state.jobsFilters.type;
+  const targetContains = state.jobsFilters.target_contains.toLowerCase().trim();
+  const runningOnly = !!state.jobsFilters.running_only;
+
+  return rows.filter((r) => {
+    const rowStatus = (r.status || "").toLowerCase();
+    const rowType = (r.type || "").toLowerCase();
+    const rowTarget = (r.target_ref || "").toLowerCase();
+
+    if (status !== "all" && rowStatus !== status) return false;
+    if (type !== "all" && rowType !== type) return false;
+    if (targetContains && !rowTarget.includes(targetContains)) return false;
+    if (runningOnly && rowStatus !== "running") return false;
+    return true;
+  });
+}
+
 function renderJobs(progress) {
-  const rows = progress.recent_jobs || [];
-  document.getElementById("jobs-count").textContent = rows.length;
+  const allRows = progress.recent_jobs || [];
+  const rows = applyJobsFilters(allRows);
+  document.getElementById("jobs-count").textContent = `${rows.length}/${allRows.length}`;
   const tbody = document.getElementById("jobs-tbody");
 
   if (!rows.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No jobs yet.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No jobs match current filters.</td></tr>';
     return;
   }
 
@@ -650,37 +1067,35 @@ function renderJobs(progress) {
       <td class="mono">${esc(r.type)}</td>
       <td class="mono" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.target_ref) || '-'}</td>
       <td>${statusBadge(r.status)}</td>
-      <td class="mono">${duration(r.started_at, r.finished_at)}</td>
+      <td class="mono js-duration" data-start="${escAttr(r.started_at || "")}" data-end="${escAttr(r.finished_at || "")}">${esc(duration(r.started_at, r.finished_at))}</td>
       <td class="mono">${num(r.retry_count)}</td>
       <td class="mono">${esc(r.worker_name) || '-'}</td>
-      <td class="muted" title="${esc(ts(r.started_at))}">${esc(relTs(r.started_at))}</td>
-      <td class="muted" title="${esc(ts(r.finished_at))}">${esc(relTs(r.finished_at))}</td>
+      <td><span class="muted js-rel" data-ts="${escAttr(r.started_at || "")}" title="${escAttr(ts(r.started_at))}">${esc(relTs(r.started_at))}</span></td>
+      <td><span class="muted js-rel" data-ts="${escAttr(r.finished_at || "")}" title="${escAttr(ts(r.finished_at))}">${esc(relTs(r.finished_at))}</span></td>
     </tr>
   `).join("");
 }
 
-async function refreshProgress() {
-  const progress = await apiFetch("/admin/progress?target_limit=200&recent_job_limit=60&window_hours=24");
-  renderKpis(progress);
-  renderPipeline(progress);
-  renderTargets(progress);
-  renderJobs(progress);
+function summarizeDlq(data) {
+  let total = 0;
+  Object.values(data || {}).forEach((q) => {
+    total += num(q.depth);
+  });
+  return total;
 }
 
-async function refreshDlq() {
-  const data = await apiFetch("/admin/dlq");
-  let total = 0;
+function renderDlq(data) {
+  const total = summarizeDlq(data);
+  document.getElementById("dlq-count").textContent = `${total}`;
+
   const items = [];
-  for (const [q, v] of Object.entries(data)) {
-    total += num(v.depth);
+  for (const [q, v] of Object.entries(data || {})) {
     for (const item of (v.recent || [])) {
       items.push({ queue: q, ...item });
     }
   }
 
-  document.getElementById("dlq-count").textContent = total;
   const el = document.getElementById("dlq-content");
-
   if (!items.length) {
     el.className = "dlq-empty";
     el.textContent = "No errors.";
@@ -691,30 +1106,29 @@ async function refreshDlq() {
   el.innerHTML = items.map((i) => `<div class="dlq-item">[${esc(i.queue)}] ${esc(JSON.stringify(i, null, 2))}</div>`).join("");
 }
 
-async function refreshFindings() {
-  const rows = await apiFetch("/findings?limit=100");
-  document.getElementById("findings-count").textContent = rows.length;
+function renderFindings(rows) {
+  document.getElementById("findings-count").textContent = `${rows.length}`;
   const tbody = document.getElementById("findings-tbody");
 
   if (!rows.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No findings yet.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No findings for selected filters.</td></tr>';
     return;
   }
 
   tbody.innerHTML = rows.map((r) => `
     <tr>
       <td><span class="badge ${esc((r.severity || "info").toLowerCase())}">${esc(r.severity || "info")}</span></td>
-      <td>${esc(r.title)}</td>
-      <td class="mono">${esc(r.host)}</td>
-      <td class="mono" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.url)}</td>
-      <td class="muted" title="${esc(ts(r.first_seen))}">${esc(relTs(r.first_seen))}</td>
+      <td>${esc(r.title || "-")}</td>
+      <td class="mono">${esc(r.host || "-")}</td>
+      <td class="mono muted">${esc(r.scope_root || "-")}</td>
+      <td class="mono" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.url || "-")}</td>
+      <td><span class="muted js-rel" data-ts="${escAttr(r.first_seen || "")}" title="${escAttr(ts(r.first_seen))}">${esc(relTs(r.first_seen))}</span></td>
     </tr>
   `).join("");
 }
 
-async function refreshSubdomains() {
-  const rows = await apiFetch("/subdomains?limit=200");
-  document.getElementById("subdomains-count").textContent = rows.length;
+function renderSubdomains(rows) {
+  document.getElementById("subdomains-count").textContent = `${rows.length}`;
   const tbody = document.getElementById("subdomains-tbody");
 
   if (!rows.length) {
@@ -727,82 +1141,313 @@ async function refreshSubdomains() {
       <td class="mono">${esc(r.hostname)}</td>
       <td class="mono muted">${esc(r.scope_root)}</td>
       <td class="muted">${esc(r.source)}</td>
-      <td class="muted" title="${esc(ts(r.first_seen))}">${esc(relTs(r.first_seen))}</td>
-      <td class="muted" title="${esc(ts(r.last_seen))}">${esc(relTs(r.last_seen))}</td>
+      <td><span class="muted js-rel" data-ts="${escAttr(r.first_seen || "")}" title="${escAttr(ts(r.first_seen))}">${esc(relTs(r.first_seen))}</span></td>
+      <td><span class="muted js-rel" data-ts="${escAttr(r.last_seen || "")}" title="${escAttr(ts(r.last_seen))}">${esc(relTs(r.last_seen))}</span></td>
     </tr>
   `).join("");
+}
+
+function populateFindingsTargets(targets) {
+  const sel = document.getElementById("findings-filter-target");
+  const current = state.findingsFilters.target_id || "all";
+  const options = ['<option value="all">all targets</option>'];
+  (targets || []).forEach((t) => {
+    options.push(`<option value="${num(t.id)}">${esc(t.scope_root)}</option>`);
+  });
+  sel.innerHTML = options.join("");
+
+  if (current !== "all" && Array.from(sel.options).some((o) => o.value === current)) {
+    sel.value = current;
+  } else {
+    sel.value = "all";
+    state.findingsFilters.target_id = "all";
+  }
+}
+
+function updateRefreshInfo() {
+  const el = document.getElementById("refresh-ts");
+  if (state.inFlight) {
+    el.textContent = "Updating...";
+    return;
+  }
+
+  const last = state.lastFetchAt ? new Date(state.lastFetchAt).toLocaleTimeString() : "never";
+  const leftSecs = state.nextRefreshAt ? Math.max(0, Math.ceil((state.nextRefreshAt - Date.now()) / 1000)) : 0;
+  const stale = state.failCount > 0 ? ` | retry x${state.failCount}` : "";
+  el.textContent = `Last update: ${last} | next in ${leftSecs}s | fetch ${state.lastFetchDurationMs}ms${stale}`;
+}
+
+function updateLiveElements() {
+  document.querySelectorAll(".js-rel").forEach((el) => {
+    const stamp = el.dataset.ts || "";
+    el.textContent = relTs(stamp);
+  });
+
+  document.querySelectorAll(".js-duration").forEach((el) => {
+    const start = el.dataset.start || "";
+    const end = el.dataset.end || "";
+    el.textContent = duration(start, end);
+  });
+
+  document.querySelectorAll(".js-next-recon").forEach((el) => {
+    const due = el.dataset.due || "";
+    const overdue = el.dataset.overdue === "1";
+    el.textContent = nextReconText(due, overdue);
+  });
+
+  updateRefreshInfo();
+}
+
+function setStale(message) {
+  const banner = document.getElementById("stale-banner");
+  if (!message) {
+    banner.classList.add("hidden");
+    banner.textContent = "";
+    return;
+  }
+  banner.textContent = message;
+  banner.classList.remove("hidden");
+}
+
+function clearPollTimer() {
+  if (state.pollTimer) {
+    clearTimeout(state.pollTimer);
+    state.pollTimer = null;
+  }
+}
+
+function getNextPollMs() {
+  const base = state.controls.refresh_interval_secs * 1000;
+  if (state.failCount <= 0) return base;
+  return Math.min(30000, base * Math.pow(2, state.failCount));
+}
+
+function scheduleNextPoll() {
+  clearPollTimer();
+  const ms = getNextPollMs();
+  state.nextRefreshAt = Date.now() + ms;
+  state.pollTimer = setTimeout(() => { refreshAll(false); }, ms);
+  updateRefreshInfo();
+}
+
+async function patchTarget(targetId, payload) {
+  try {
+    await apiFetch(`/targets/${targetId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    await refreshAll(true);
+  } catch (e) {
+    showFormMsg("err", `Target update failed: ${e.message}`);
+    await refreshAll(true);
+  }
+}
+
+async function runTargetNow(targetId) {
+  try {
+    const body = await apiFetch(`/targets/${targetId}/run`, { method: "POST" });
+    if (body.dedup_suppressed) {
+      showFormMsg("err", `Run now suppressed for ${body.scope_root} (already queued recently).`);
+    } else {
+      showFormMsg("ok", `Run now queued for ${body.scope_root}.`);
+    }
+    await refreshAll(true);
+  } catch (e) {
+    showFormMsg("err", `Run now failed: ${e.message}`);
+  }
+}
+
+async function disableTarget(id, domain) {
+  if (!confirm(`Disable target "${domain}"?\n\nExisting data is kept.`)) return;
+  await apiFetch(`/targets/${id}`, { method: "DELETE" });
+  showFormMsg("ok", `Disabled ${domain}.`);
+  await refreshAll(true);
 }
 
 async function addTarget() {
   const domain = document.getElementById("new-domain").value.trim();
   const notes = document.getElementById("new-notes").value.trim();
-  const msg = document.getElementById("form-msg");
+  const activeRecon = document.getElementById("new-active-recon").checked;
+  const bruteWordlist = document.getElementById("new-brute-wordlist").value;
 
   if (!domain) {
-    msg.className = "form-msg err";
-    msg.textContent = "Enter a domain.";
+    showFormMsg("err", "Enter a domain.");
     return;
   }
 
   try {
-    const r = await fetch(`${BASE}/targets`, {
+    const body = await apiFetch("/targets", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scope_root: domain, notes: notes || null }),
+      body: JSON.stringify({
+        scope_root: domain,
+        notes: notes || null,
+        active_recon: activeRecon,
+        brute_wordlist: bruteWordlist,
+      }),
     });
 
-    const body = await r.json();
-    if (!r.ok) {
-      const detail = body.detail;
-      const errMsg = Array.isArray(detail)
-        ? detail.map((e) => e.msg).join(", ")
-        : (detail || r.statusText);
-      msg.className = "form-msg err";
-      msg.textContent = errMsg;
-      return;
-    }
-
-    msg.className = "form-msg ok";
-    msg.textContent = `Queued: ${domain}`;
+    showFormMsg("ok", `Queued: ${body.scope_root}`);
     document.getElementById("new-domain").value = "";
     document.getElementById("new-notes").value = "";
-    setTimeout(() => { msg.textContent = ""; }, 4000);
-    refreshAll();
+    await refreshAll(true);
   } catch (e) {
-    msg.className = "form-msg err";
-    msg.textContent = e.message;
+    showFormMsg("err", e.message);
   }
 }
 
-async function disableTarget(id, domain) {
-  if (!confirm(`Remove target "${domain}"?\n\nThis disables it - existing data is kept.`)) return;
-  await fetch(`${BASE}/targets/${id}`, { method: "DELETE" });
-  refreshAll();
+function applyJobsFilterControls() {
+  state.jobsFilters.status = document.getElementById("jobs-filter-status").value;
+  state.jobsFilters.type = document.getElementById("jobs-filter-type").value;
+  state.jobsFilters.target_contains = document.getElementById("jobs-filter-target").value;
+  state.jobsFilters.running_only = document.getElementById("jobs-filter-running").checked;
+  if (state.progress) renderJobs(state.progress);
 }
 
-document.getElementById("new-domain").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") addTarget();
-});
+function bindControls() {
+  document.getElementById("btn-add-target").addEventListener("click", addTarget);
+  document.getElementById("new-domain").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") addTarget();
+  });
 
-async function refreshAll() {
-  const start = new Date();
-  document.getElementById("refresh-ts").textContent = `Updating... ${start.toLocaleTimeString()}`;
+  document.getElementById("btn-apply-controls").addEventListener("click", async () => {
+    readControlsFromDom();
+    renderControlsHint();
+    scheduleNextPoll();
+    await refreshAll(true);
+  });
 
-  await Promise.allSettled([
-    refreshHealth(),
-    refreshProgress(),
-    refreshDlq(),
-    refreshFindings(),
-    refreshSubdomains(),
-  ]);
+  document.getElementById("btn-refresh-now").addEventListener("click", async () => {
+    await refreshAll(true);
+  });
 
-  const end = new Date();
-  document.getElementById("refresh-ts").textContent = `Last update: ${end.toLocaleTimeString()}`;
+  ["jobs-filter-status", "jobs-filter-type", "jobs-filter-target", "jobs-filter-running"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", applyJobsFilterControls);
+    document.getElementById(id).addEventListener("change", applyJobsFilterControls);
+  });
+
+  document.getElementById("jobs-filter-clear").addEventListener("click", () => {
+    state.jobsFilters = { status: "all", type: "all", target_contains: "", running_only: false };
+    document.getElementById("jobs-filter-status").value = "all";
+    document.getElementById("jobs-filter-type").value = "all";
+    document.getElementById("jobs-filter-target").value = "";
+    document.getElementById("jobs-filter-running").checked = false;
+    applyJobsFilterControls();
+  });
+
+  document.getElementById("findings-filter-apply").addEventListener("click", async () => {
+    state.findingsFilters.severity = document.getElementById("findings-filter-severity").value;
+    state.findingsFilters.target_id = document.getElementById("findings-filter-target").value;
+    state.findingsFilters.window_hours = clamp(num(document.getElementById("findings-filter-window").value), BOUNDS.findings_window_hours.min, BOUNDS.findings_window_hours.max);
+    document.getElementById("findings-filter-window").value = state.findingsFilters.window_hours;
+    state.controls.findings_window_hours = state.findingsFilters.window_hours;
+    saveControls();
+    await refreshAll(true);
+  });
+
+  document.getElementById("findings-filter-clear").addEventListener("click", async () => {
+    state.findingsFilters.severity = "all";
+    state.findingsFilters.target_id = "all";
+    state.findingsFilters.window_hours = state.controls.window_hours;
+    document.getElementById("findings-filter-severity").value = "all";
+    document.getElementById("findings-filter-target").value = "all";
+    document.getElementById("findings-filter-window").value = state.findingsFilters.window_hours;
+    state.controls.findings_window_hours = state.findingsFilters.window_hours;
+    saveControls();
+    await refreshAll(true);
+  });
 }
 
-refreshAll();
-setInterval(refreshAll, 5000);
+async function refreshAll(force = false) {
+  if (state.inFlight) {
+    if (force) showFormMsg("err", "Refresh already in progress.");
+    return;
+  }
+
+  state.inFlight = true;
+  updateRefreshInfo();
+  const started = Date.now();
+
+  try {
+    const progress = await apiFetch(buildProgressPath());
+    const [dlq, findings, subdomains] = await Promise.all([
+      apiFetch("/admin/dlq"),
+      apiFetch(buildFindingsPath()),
+      apiFetch("/subdomains?limit=200"),
+    ]);
+
+    state.progress = progress;
+    state.dlq = dlq;
+    state.findings = findings;
+    state.subdomains = subdomains;
+
+    await refreshHealth();
+
+    populateFindingsTargets(progress.targets || []);
+    renderTelemetry(progress, summarizeDlq(dlq));
+    renderKpis(progress);
+    renderPipeline(progress);
+    renderTargets(progress);
+    renderJobs(progress);
+    renderDlq(dlq);
+    renderFindings(findings);
+    renderSubdomains(subdomains);
+
+    setStale("");
+    state.failCount = 0;
+    state.lastFetchAt = Date.now();
+    state.lastFetchDurationMs = Date.now() - started;
+    showFormMsg("", "");
+  } catch (e) {
+    state.failCount += 1;
+    setStale(`Data refresh failed (${state.failCount}). Retaining last data. Error: ${e.message}`);
+  } finally {
+    state.inFlight = false;
+    scheduleNextPoll();
+  }
+}
+
+async function loadMeta() {
+  try {
+    state.meta = await apiFetch("/admin/meta");
+    const d = state.meta.defaults || {};
+    const b = state.meta.bounds || {};
+
+    DEFAULTS.window_hours = num(d.window_hours) || DEFAULTS.window_hours;
+    DEFAULTS.target_limit = num(d.target_limit) || DEFAULTS.target_limit;
+    DEFAULTS.recent_job_limit = num(d.recent_job_limit) || DEFAULTS.recent_job_limit;
+    DEFAULTS.refresh_interval_secs = num(d.refresh_interval_secs) || DEFAULTS.refresh_interval_secs;
+
+    BOUNDS.window_hours = { min: num(b.window_hours?.min) || BOUNDS.window_hours.min, max: num(b.window_hours?.max) || BOUNDS.window_hours.max };
+    BOUNDS.target_limit = { min: num(b.target_limit?.min) || BOUNDS.target_limit.min, max: num(b.target_limit?.max) || BOUNDS.target_limit.max };
+    BOUNDS.recent_job_limit = { min: num(b.recent_job_limit?.min) || BOUNDS.recent_job_limit.min, max: num(b.recent_job_limit?.max) || BOUNDS.recent_job_limit.max };
+    BOUNDS.refresh_interval_secs = { min: num(b.refresh_interval_secs?.min) || BOUNDS.refresh_interval_secs.min, max: num(b.refresh_interval_secs?.max) || BOUNDS.refresh_interval_secs.max };
+  } catch {
+    state.meta = {
+      allowed_wordlists: ["dns-small.txt", "dns-medium.txt", "dns-large.txt"],
+      recon_interval_hours: 24,
+    };
+  }
+}
+
+async function bootstrap() {
+  state.controls = loadSavedControls();
+  applyBounds();
+  state.findingsFilters.window_hours = state.controls.findings_window_hours || state.controls.window_hours;
+
+  await loadMeta();
+  renderWordlistOptions("new-brute-wordlist", state.meta.allowed_wordlists?.[0] || "dns-small.txt");
+  renderJobsTypeOptions();
+  bindControls();
+  setControlsToDom();
+  renderControlsHint();
+
+  state.tickerTimer = setInterval(updateLiveElements, 1000);
+  await refreshAll(true);
+}
+
+bootstrap();
 </script>
 </body>
 </html>
-

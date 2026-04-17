@@ -3,11 +3,15 @@ Ingestor — FastAPI service for target submission and periodic refresh scheduli
 
 Endpoints
 ---------
+  GET  /admin/meta           Dashboard control metadata (limits/defaults/options).
+  GET  /admin/progress       Consolidated progress snapshot for UI rendering.
   POST /targets              Add a new scope root; enqueues first recon job.
   GET  /targets              List all targets with last-seen job status.
+  PATCH /targets/{id}        Update target scan configuration.
+  POST /targets/{id}/run     Trigger an immediate recon enqueue for a target.
   DELETE /targets/{id}       Disable a target (sets enabled=0).
   GET  /targets/{id}/jobs    Recent jobs for a target.
-  GET  /findings             Recent findings (optional ?severity= filter).
+  GET  /findings             Recent findings (supports severity/target/window filters).
   GET  /health               Liveness probe.
 """
 
@@ -32,17 +36,32 @@ from common.db import db_conn, init_db
 from common.queue import enqueue, wait_for_redis
 
 # ---------------------------------------------------------------------------
+LOG_DIR = os.environ.get("LOG_DIR", "/logs")
+if not os.path.isdir(LOG_DIR):
+    LOG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "logs"))
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, "ingestor.log")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("/logs/ingestor.log"),
+        logging.FileHandler(LOG_FILE),
     ],
 )
 logger = logging.getLogger("ingestor")
 
 RECON_INTERVAL_HOURS = float(os.environ.get("DEFAULT_RECON_INTERVAL_HOURS", 24))
+DEFAULT_WINDOW_HOURS = int(os.environ.get("DASHBOARD_DEFAULT_WINDOW_HOURS", 24))
+DEFAULT_TARGET_LIMIT = int(os.environ.get("DASHBOARD_DEFAULT_TARGET_LIMIT", 200))
+DEFAULT_RECENT_JOB_LIMIT = int(os.environ.get("DASHBOARD_DEFAULT_RECENT_JOB_LIMIT", 60))
+DEFAULT_REFRESH_INTERVAL_SECS = int(os.environ.get("DASHBOARD_DEFAULT_REFRESH_INTERVAL_SECS", 5))
+RUN_NOW_DEDUP_SECS = int(os.environ.get("RUN_NOW_DEDUP_SECS", 60))
+WINDOW_HOURS_BOUNDS = (1, 168)
+TARGET_LIMIT_BOUNDS = (1, 500)
+RECENT_JOB_LIMIT_BOUNDS = (5, 200)
+REFRESH_INTERVAL_BOUNDS = (2, 60)
 
 app = FastAPI(title="Recon Platform Ingestor", version="1.0")
 
@@ -52,6 +71,7 @@ _refresh_thread: Optional[threading.Thread] = None
 _DLQ_QUEUES = ["recon_domain", "brute_domain", "probe_host", "scan_http", "notify_finding"]
 
 _ALLOWED_WORDLISTS = {"dns-small.txt", "dns-medium.txt", "dns-large.txt"}
+_STATIC_DIR = "/app/static" if os.path.isdir("/app/static") else os.path.join(os.path.dirname(__file__), "static")
 
 
 def get_r() -> redis_lib.Redis:
@@ -72,6 +92,9 @@ def get_r() -> redis_lib.Redis:
 @app.on_event("startup")
 def on_startup():
     global _refresh_thread
+    if os.environ.get("INGESTOR_DISABLE_STARTUP", "0") == "1":
+        logger.info("Startup IO disabled via INGESTOR_DISABLE_STARTUP=1")
+        return
     init_db()
     get_r()
     _refresh_thread = threading.Thread(target=_refresh_loop, daemon=True, name="refresh")
@@ -255,11 +278,43 @@ def dlq_status():
     return result
 
 
+@app.get("/admin/meta")
+def admin_meta():
+    return {
+        "allowed_wordlists": sorted(_ALLOWED_WORDLISTS),
+        "recon_interval_hours": RECON_INTERVAL_HOURS,
+        "defaults": {
+            "window_hours": DEFAULT_WINDOW_HOURS,
+            "target_limit": DEFAULT_TARGET_LIMIT,
+            "recent_job_limit": DEFAULT_RECENT_JOB_LIMIT,
+            "refresh_interval_secs": DEFAULT_REFRESH_INTERVAL_SECS,
+        },
+        "bounds": {
+            "window_hours": {"min": WINDOW_HOURS_BOUNDS[0], "max": WINDOW_HOURS_BOUNDS[1]},
+            "target_limit": {"min": TARGET_LIMIT_BOUNDS[0], "max": TARGET_LIMIT_BOUNDS[1]},
+            "recent_job_limit": {"min": RECENT_JOB_LIMIT_BOUNDS[0], "max": RECENT_JOB_LIMIT_BOUNDS[1]},
+            "refresh_interval_secs": {"min": REFRESH_INTERVAL_BOUNDS[0], "max": REFRESH_INTERVAL_BOUNDS[1]},
+        },
+    }
+
+
 @app.get("/admin/progress")
 def progress_snapshot(
-    target_limit: int = Query(default=100, ge=1, le=500),
-    recent_job_limit: int = Query(default=40, ge=5, le=200),
-    window_hours: int = Query(default=24, ge=1, le=168),
+    target_limit: int = Query(
+        default=DEFAULT_TARGET_LIMIT,
+        ge=TARGET_LIMIT_BOUNDS[0],
+        le=TARGET_LIMIT_BOUNDS[1],
+    ),
+    recent_job_limit: int = Query(
+        default=DEFAULT_RECENT_JOB_LIMIT,
+        ge=RECENT_JOB_LIMIT_BOUNDS[0],
+        le=RECENT_JOB_LIMIT_BOUNDS[1],
+    ),
+    window_hours: int = Query(
+        default=DEFAULT_WINDOW_HOURS,
+        ge=WINDOW_HOURS_BOUNDS[0],
+        le=WINDOW_HOURS_BOUNDS[1],
+    ),
 ):
     """
     Consolidated operational snapshot for dashboard rendering.
@@ -287,7 +342,13 @@ def progress_snapshot(
                   (SELECT COUNT(*) FROM findings) AS findings_total,
                   (SELECT COUNT(*) FROM findings
                    WHERE first_seen > datetime('now', :window || ' hours')) AS findings_window,
-                  (SELECT COUNT(*) FROM jobs WHERE status = 'running') AS jobs_running
+                  (SELECT COUNT(*) FROM jobs WHERE status = 'running') AS jobs_running,
+                  (SELECT MIN(started_at)
+                   FROM jobs
+                   WHERE status = 'running' AND started_at IS NOT NULL) AS oldest_running_started_at,
+                  (SELECT MAX(finished_at)
+                   FROM jobs
+                   WHERE finished_at IS NOT NULL) AS last_job_finished_at
                 """,
                 {"window": f"-{window_hours}"},
             ).fetchone()
@@ -297,7 +358,7 @@ def progress_snapshot(
             """
             SELECT type, status, COUNT(*) AS count
             FROM jobs
-            WHERE type IN ('recon_domain', 'probe_host', 'scan_http', 'notify_finding')
+            WHERE type IN ('recon_domain', 'brute_domain', 'probe_host', 'scan_http', 'notify_finding')
             GROUP BY type, status
             """
         ).fetchall()
@@ -305,7 +366,7 @@ def progress_snapshot(
             """
             SELECT type, status, COUNT(*) AS count
             FROM jobs
-            WHERE type IN ('recon_domain', 'probe_host', 'scan_http', 'notify_finding')
+            WHERE type IN ('recon_domain', 'brute_domain', 'probe_host', 'scan_http', 'notify_finding')
               AND created_at > datetime('now', :window || ' hours')
             GROUP BY type, status
             """,
@@ -318,7 +379,7 @@ def progress_snapshot(
               MAX(CASE WHEN status = 'done' THEN finished_at END) AS last_done_at,
               MAX(CASE WHEN status = 'failed' THEN finished_at END) AS last_failed_at
             FROM jobs
-            WHERE type IN ('recon_domain', 'probe_host', 'scan_http', 'notify_finding')
+            WHERE type IN ('recon_domain', 'brute_domain', 'probe_host', 'scan_http', 'notify_finding')
             GROUP BY type
             """
         ).fetchall()
@@ -334,64 +395,83 @@ def progress_snapshot(
         ).fetchall()
         targets = conn.execute(
             """
-            SELECT
-              t.id, t.scope_root, t.enabled, t.created_at, t.notes,
-              COALESCE(sd.subdomain_count, 0) AS subdomain_count,
-              COALESCE(ep.live_endpoint_count, 0) AS live_endpoint_count,
-              COALESCE(fd.finding_count, 0) AS finding_count,
-              (
-                SELECT MAX(j.finished_at)
-                FROM jobs j
-                WHERE j.type = 'recon_domain'
-                  AND j.target_ref = t.scope_root
-                  AND j.status = 'done'
-              ) AS last_recon,
-              (
-                SELECT COUNT(*)
-                FROM jobs j
-                WHERE j.type = 'recon_domain'
-                  AND j.target_ref = t.scope_root
-                  AND j.status = 'done'
-                  AND j.finished_at > datetime('now', :window || ' hours')
-              ) AS recon_done_window,
-              NULLIF(
-                MAX(
-                  COALESCE(
-                    (
-                      SELECT MAX(j.finished_at)
-                      FROM jobs j
-                      WHERE j.target_ref = t.scope_root
+            WITH target_enriched AS (
+              SELECT
+                t.id, t.scope_root, t.enabled, t.created_at, t.notes,
+                t.active_recon, t.brute_wordlist,
+                COALESCE(sd.subdomain_count, 0) AS subdomain_count,
+                COALESCE(ep.live_endpoint_count, 0) AS live_endpoint_count,
+                COALESCE(fd.finding_count, 0) AS finding_count,
+                (
+                  SELECT MAX(j.finished_at)
+                  FROM jobs j
+                  WHERE j.type = 'recon_domain'
+                    AND j.target_ref = t.scope_root
+                    AND j.status = 'done'
+                ) AS last_recon,
+                (
+                  SELECT COUNT(*)
+                  FROM jobs j
+                  WHERE j.type = 'recon_domain'
+                    AND j.target_ref = t.scope_root
+                    AND j.status = 'done'
+                    AND j.finished_at > datetime('now', :window || ' hours')
+                ) AS recon_done_window,
+                NULLIF(
+                  MAX(
+                    COALESCE(
+                      (
+                        SELECT MAX(j.finished_at)
+                        FROM jobs j
+                        WHERE j.target_ref = t.scope_root
+                      ),
+                      '1970-01-01 00:00:00'
                     ),
-                    '1970-01-01 00:00:00'
+                    COALESCE(sd.last_subdomain_seen, '1970-01-01 00:00:00')
                   ),
-                  COALESCE(sd.last_subdomain_seen, '1970-01-01 00:00:00')
-                ),
-                '1970-01-01 00:00:00'
-              ) AS last_activity
-            FROM targets t
-            LEFT JOIN (
-              SELECT target_id, COUNT(*) AS subdomain_count, MAX(last_seen) AS last_subdomain_seen
-              FROM subdomains
-              GROUP BY target_id
-            ) sd ON sd.target_id = t.id
-            LEFT JOIN (
-              SELECT s.target_id, COUNT(*) AS live_endpoint_count
-              FROM endpoints e
-              JOIN subdomains s ON s.id = e.subdomain_id
-              WHERE e.alive = 1
-              GROUP BY s.target_id
-            ) ep ON ep.target_id = t.id
-            LEFT JOIN (
-              SELECT s.target_id, COUNT(*) AS finding_count
-              FROM findings f
-              JOIN endpoints e ON e.id = f.endpoint_id
-              JOIN subdomains s ON s.id = e.subdomain_id
-              GROUP BY s.target_id
-            ) fd ON fd.target_id = t.id
-            ORDER BY t.enabled DESC, last_activity DESC, t.created_at DESC
+                  '1970-01-01 00:00:00'
+                ) AS last_activity
+              FROM targets t
+              LEFT JOIN (
+                SELECT target_id, COUNT(*) AS subdomain_count, MAX(last_seen) AS last_subdomain_seen
+                FROM subdomains
+                GROUP BY target_id
+              ) sd ON sd.target_id = t.id
+              LEFT JOIN (
+                SELECT s.target_id, COUNT(*) AS live_endpoint_count
+                FROM endpoints e
+                JOIN subdomains s ON s.id = e.subdomain_id
+                WHERE e.alive = 1
+                GROUP BY s.target_id
+              ) ep ON ep.target_id = t.id
+              LEFT JOIN (
+                SELECT s.target_id, COUNT(*) AS finding_count
+                FROM findings f
+                JOIN endpoints e ON e.id = f.endpoint_id
+                JOIN subdomains s ON s.id = e.subdomain_id
+                GROUP BY s.target_id
+              ) fd ON fd.target_id = t.id
+            )
+            SELECT
+              te.*,
+              datetime(COALESCE(te.last_recon, te.created_at), :recon_interval || ' hours') AS next_recon_due_at,
+              CAST(
+                unixepoch(datetime(COALESCE(te.last_recon, te.created_at), :recon_interval || ' hours')) - unixepoch('now')
+                AS INTEGER
+              ) AS next_recon_in_secs,
+              CASE
+                WHEN unixepoch(datetime(COALESCE(te.last_recon, te.created_at), :recon_interval || ' hours')) < unixepoch('now')
+                THEN 1 ELSE 0
+              END AS is_recon_overdue
+            FROM target_enriched te
+            ORDER BY te.enabled DESC, te.last_activity DESC, te.created_at DESC
             LIMIT :target_limit
             """,
-            {"window": f"-{window_hours}", "target_limit": target_limit},
+            {
+                "window": f"-{window_hours}",
+                "target_limit": target_limit,
+                "recon_interval": str(RECON_INTERVAL_HOURS),
+            },
         ).fetchall()
 
     pipeline = {
@@ -401,6 +481,7 @@ def progress_snapshot(
             "window": {"pending": 0, "running": 0, "done": 0, "failed": 0},
             "last_done_at": None,
             "last_failed_at": None,
+            "done_per_hour_window": 0.0,
         }
         for q in _DLQ_QUEUES
     }
@@ -418,6 +499,8 @@ def progress_snapshot(
         if q in pipeline:
             pipeline[q]["last_done_at"] = row["last_done_at"]
             pipeline[q]["last_failed_at"] = row["last_failed_at"]
+    for q in _DLQ_QUEUES:
+        pipeline[q]["done_per_hour_window"] = pipeline[q]["window"]["done"] / float(window_hours)
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -440,8 +523,8 @@ def add_target(body: TargetIn):
         if existing:
             if not existing["enabled"]:
                 conn.execute(
-                    "UPDATE targets SET enabled = 1, notes = ? WHERE id = ?",
-                    (body.notes, existing["id"]),
+                    "UPDATE targets SET enabled = 1, notes = ?, active_recon = ?, brute_wordlist = ? WHERE id = ?",
+                    (body.notes, body.active_recon, body.brute_wordlist, existing["id"]),
                 )
                 target_id = existing["id"]
                 logger.info("Re-enabled target %s", body.scope_root)
@@ -504,6 +587,33 @@ def update_target(target_id: int, body: TargetUpdate):
     return dict(updated)
 
 
+@app.post("/targets/{target_id}/run", status_code=200)
+def run_target_now(target_id: int):
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT id, scope_root, enabled FROM targets WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Target not found")
+        if not row["enabled"]:
+            raise HTTPException(status_code=409, detail="Target is disabled")
+
+    queued = enqueue(
+        get_r(),
+        "recon_domain",
+        {"domain": row["scope_root"]},
+        dedup_key=f"manual:{row['scope_root']}",
+        dedup_ttl_secs=RUN_NOW_DEDUP_SECS,
+    )
+    return {
+        "target_id": row["id"],
+        "scope_root": row["scope_root"],
+        "queued": queued,
+        "dedup_suppressed": not queued,
+    }
+
+
 @app.delete("/targets/{target_id}", status_code=200)
 def disable_target(target_id: int):
     with db_conn() as conn:
@@ -534,20 +644,31 @@ def target_jobs(target_id: int, limit: int = Query(default=20, le=100)):
 @app.get("/findings")
 def list_findings(
     severity: Optional[str] = None,
+    target_id: Optional[int] = None,
+    window_hours: Optional[int] = Query(default=None, ge=WINDOW_HOURS_BOUNDS[0], le=WINDOW_HOURS_BOUNDS[1]),
     limit: int = Query(default=50, le=500),
 ):
     severity_filter = "AND f.severity = :sev" if severity else ""
+    target_filter = "AND t.id = :tid" if target_id else ""
+    window_filter = "AND f.first_seen > datetime('now', :window || ' hours')" if window_hours else ""
     with db_conn() as conn:
         rows = conn.execute(
             f"""
             SELECT f.id, f.template_id, f.severity, f.title, f.matched_at,
-                   f.first_seen, e.url, e.host
+                   f.first_seen, e.url, e.host, t.scope_root
             FROM findings f
             JOIN endpoints e ON e.id = f.endpoint_id
-            WHERE 1=1 {severity_filter}
+            JOIN subdomains s ON s.id = e.subdomain_id
+            JOIN targets t ON t.id = s.target_id
+            WHERE 1=1 {severity_filter} {target_filter} {window_filter}
             ORDER BY f.first_seen DESC LIMIT :lim
             """,
-            {"sev": severity, "lim": limit},
+            {
+                "sev": severity,
+                "tid": target_id,
+                "window": f"-{window_hours}" if window_hours else None,
+                "lim": limit,
+            },
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -573,4 +694,4 @@ def list_subdomains(
     return [dict(r) for r in rows]
 
 
-app.mount("/ui", StaticFiles(directory="/app/static", html=True), name="ui")
+app.mount("/ui", StaticFiles(directory=_STATIC_DIR, html=True), name="ui")

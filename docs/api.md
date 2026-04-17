@@ -1,356 +1,200 @@
 # API Reference
 
-The ingestor exposes a REST API over HTTP on port `8090` (configurable via `INGESTOR_PORT`). All request and response bodies are JSON. No authentication is implemented in v1 — restrict access at the network level.
+The ingestor serves HTTP JSON APIs on port `8090` (override with `INGESTOR_PORT`).
 
-**Base URL:** `http://<pi-ip>:8090`
+Base URL:
 
----
-
-## POST /targets
-
-Add a new target to monitor, or re-enable a previously disabled target.
-
-On success, the target is immediately enqueued for subdomain discovery.
-
-### Request
-
-```
-POST /targets
-Content-Type: application/json
+```text
+http://<pi-ip>:8090
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `scope_root` | string | Yes | The root domain to monitor, e.g. `example.com`. Must be a valid public domain — bare IPs, single-label names, and malformed strings are rejected. Normalized to lowercase on ingest. |
-| `notes` | string | No | Optional free-text notes stored alongside the target. |
+No auth is implemented in v1. Restrict network access at deployment time.
 
-#### Validation rules for `scope_root`
+## Targets
 
-The ingestor validates the domain against a strict regex before accepting it. Accepted formats:
-- `example.com`
-- `sub.example.com`
-- `example.co.uk`
+### POST `/targets`
 
-Rejected:
-- Bare IP addresses (`192.168.1.1`)
-- Single labels (`localhost`, `example`)
-- Values with trailing dots, leading hyphens, or empty labels
+Create a target (or re-enable a disabled one) and enqueue initial recon.
 
-### Response — 201 Created
+Request body:
+
+```json
+{
+  "scope_root": "example.com",
+  "notes": "bug bounty program",
+  "active_recon": true,
+  "brute_wordlist": "dns-medium.txt"
+}
+```
+
+`brute_wordlist` must be one of:
+
+- `dns-small.txt`
+- `dns-medium.txt`
+- `dns-large.txt`
+
+Response (`201`):
 
 ```json
 {
   "id": 1,
   "scope_root": "example.com",
-  "queued": true
+  "queued": true,
+  "active_recon": true,
+  "brute_wordlist": "dns-medium.txt"
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | integer | `targets.id` of the created or re-enabled row |
-| `scope_root` | string | Normalized domain as stored |
-| `queued` | boolean | `true` if a `recon_domain` task was successfully enqueued; `false` if the inflight dedup key was already set (target was recently queued) |
+### GET `/targets`
 
-### Response — 422 Unprocessable Entity
+List targets and target-level summary fields.
 
-Returned when `scope_root` fails validation.
+### PATCH `/targets/{target_id}`
+
+Update target scan config.
+
+Request body supports:
+
+- `active_recon` (bool)
+- `brute_wordlist` (allowed values above)
+
+### POST `/targets/{target_id}/run`
+
+Manually trigger a recon enqueue for one target.
+
+Responses:
+
+- `200`: queued or dedup-suppressed
+- `404`: unknown target
+- `409`: target exists but is disabled
+
+Response shape:
 
 ```json
 {
-  "detail": [
-    {
-      "loc": ["body", "scope_root"],
-      "msg": "invalid domain",
-      "type": "value_error"
-    }
-  ]
+  "target_id": 1,
+  "scope_root": "example.com",
+  "queued": true,
+  "dedup_suppressed": false
 }
 ```
 
-### Example
+### DELETE `/targets/{target_id}`
 
-```bash
-curl -X POST http://192.168.1.191:8090/targets \
-  -H 'Content-Type: application/json' \
-  -d '{"scope_root": "example.com", "notes": "bug bounty program"}'
-```
+Disable target (data is retained).
 
----
+### GET `/targets/{target_id}/jobs`
 
-## GET /targets
+Get recent jobs for a target.
 
-List all targets with summary statistics.
+Query:
 
-### Request
+- `limit` (default `20`, max `100`)
 
-```
-GET /targets
-```
+## Dashboard/Admin
 
-No parameters.
+### GET `/admin/meta`
 
-### Response — 200 OK
+Dashboard metadata for UI controls and scan config options.
 
-Array of target objects.
+Response shape:
 
 ```json
-[
-  {
-    "id": 1,
-    "scope_root": "example.com",
-    "enabled": 1,
-    "created_at": "2024-01-15T10:30:00",
-    "notes": "bug bounty program",
-    "subdomain_count": 42,
-    "last_recon_at": "2024-01-16T08:00:00"
+{
+  "allowed_wordlists": ["dns-large.txt", "dns-medium.txt", "dns-small.txt"],
+  "recon_interval_hours": 24.0,
+  "defaults": {
+    "window_hours": 24,
+    "target_limit": 200,
+    "recent_job_limit": 60,
+    "refresh_interval_secs": 5
+  },
+  "bounds": {
+    "window_hours": {"min": 1, "max": 168},
+    "target_limit": {"min": 1, "max": 500},
+    "recent_job_limit": {"min": 5, "max": 200},
+    "refresh_interval_secs": {"min": 2, "max": 60}
   }
-]
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `id` | integer | Target ID |
-| `scope_root` | string | Root domain |
-| `enabled` | integer | `1` = active, `0` = disabled |
-| `created_at` | string | ISO-8601 creation timestamp |
-| `notes` | string or null | Operator notes |
-| `subdomain_count` | integer | Number of subdomains currently in the DB for this target |
-| `last_recon_at` | string or null | `finished_at` of the most recent successful `recon_domain` job |
-
-### Example
-
-```bash
-curl http://192.168.1.191:8090/targets
-```
-
----
-
-## DELETE /targets/{target_id}
-
-Disable a target. The target's data (subdomains, endpoints, findings) is retained. The target will no longer be included in refresh scheduling.
-
-### Request
-
-```
-DELETE /targets/{target_id}
-```
-
-| Parameter | Location | Type | Description |
-|---|---|---|---|
-| `target_id` | path | integer | The `id` of the target to disable |
-
-### Response — 200 OK
-
-```json
-{
-  "disabled": 1
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `disabled` | integer | Always `1` if the target was found and disabled |
+### GET `/admin/progress`
 
-### Response — 404 Not Found
+Consolidated operator snapshot used by the dashboard.
 
-```json
-{
-  "detail": "target not found"
-}
-```
+Query:
 
-### Example
+- `target_limit` (default `200`, min `1`, max `500`)
+- `recent_job_limit` (default `60`, min `5`, max `200`)
+- `window_hours` (default `24`, min `1`, max `168`)
 
-```bash
-curl -X DELETE http://192.168.1.191:8090/targets/1
-```
+Includes:
 
----
+- `overview` global metrics plus:
+  - `oldest_running_started_at`
+  - `last_job_finished_at`
+- `pipeline` per-stage queue + status totals plus:
+  - `done_per_hour_window`
+- `targets` with config + scheduling fields:
+  - `active_recon`
+  - `brute_wordlist`
+  - `next_recon_due_at`
+  - `next_recon_in_secs`
+  - `is_recon_overdue`
+- `recent_jobs`
 
-## GET /targets/{target_id}/jobs
+### GET `/admin/queues`
 
-Retrieve recent jobs for a specific target.
+Live queue depths for each pipeline stage:
 
-### Request
+- pending (`<queue>`)
+- processing (`<queue>:processing`)
+- dead letter (`dlq:<queue>`)
 
-```
-GET /targets/{target_id}/jobs?limit=20
-```
+### GET `/admin/dlq`
 
-| Parameter | Location | Type | Default | Max | Description |
-|---|---|---|---|---|---|
-| `target_id` | path | integer | — | — | Target ID |
-| `limit` | query | integer | `20` | `100` | Maximum number of job rows to return, ordered by `created_at DESC` |
+DLQ depths plus recent DLQ entries per stage.
 
-### Response — 200 OK
+## Findings and Subdomains
 
-```json
-[
-  {
-    "id": 55,
-    "type": "recon_domain",
-    "target_ref": "example.com",
-    "status": "done",
-    "created_at": "2024-01-16T08:00:00",
-    "started_at": "2024-01-16T08:00:01",
-    "finished_at": "2024-01-16T08:02:33",
-    "retry_count": 0,
-    "worker_name": "worker-recon",
-    "raw_output_path": "/data/output/recon/example.com-subfinder-1705392001.txt"
-  }
-]
-```
+### GET `/findings`
 
-### Response — 404 Not Found
+Query recent findings with optional filters.
 
-```json
-{
-  "detail": "target not found"
-}
-```
+Query:
 
-### Example
+- `severity` (optional: `info|low|medium|high|critical`)
+- `target_id` (optional)
+- `window_hours` (optional, min `1`, max `168`)
+- `limit` (default `50`, max `500`)
 
-```bash
-curl 'http://192.168.1.191:8090/targets/1/jobs?limit=10'
-```
+Response rows include `scope_root` for target-scoped UI filtering.
 
----
+### GET `/subdomains`
 
-## GET /findings
+List subdomains.
 
-List recent findings, optionally filtered by severity.
+Query:
 
-### Request
+- `target_id` (optional)
+- `limit` (default `100`, max `1000`)
 
-```
-GET /findings?severity=high&limit=50
-```
+## Health
 
-| Parameter | Location | Type | Default | Max | Description |
-|---|---|---|---|---|---|
-| `severity` | query | string | _(none)_ | — | Filter to a specific severity level. One of: `info`, `low`, `medium`, `high`, `critical`. If omitted, all severities are returned. |
-| `limit` | query | integer | `50` | `500` | Maximum number of findings to return, ordered by `first_seen DESC` |
+### GET `/health`
 
-### Response — 200 OK
+Returns `200` when Redis, SQLite, and refresh-thread checks pass.
+Returns `503` with issue list when unhealthy.
 
-```json
-[
-  {
-    "id": 12,
-    "template_id": "CVE-2021-44228",
-    "severity": "critical",
-    "title": "Apache Log4j RCE",
-    "matched_at": "https://api.example.com/search",
-    "first_seen": "2024-01-16T09:15:00",
-    "last_seen": "2024-01-16T09:15:00",
-    "endpoint_url": "https://api.example.com/search",
-    "scope_root": "example.com"
-  }
-]
-```
+## Dashboard Runtime Semantics
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | integer | Finding ID |
-| `template_id` | string | Nuclei template ID |
-| `severity` | string | Severity level |
-| `title` | string | Vulnerability title from template |
-| `matched_at` | string | URL where the finding was confirmed |
-| `first_seen` | string | ISO-8601 timestamp of first detection |
-| `last_seen` | string | ISO-8601 timestamp of last confirmed detection |
-| `endpoint_url` | string | Normalized URL from the `endpoints` table |
-| `scope_root` | string | Root domain of the parent target |
+Dashboard V2 (`/ui/index.html`) uses polling only (no SSE/WebSocket):
 
-### Example
-
-```bash
-# All findings
-curl http://192.168.1.191:8090/findings
-
-# Only critical findings
-curl 'http://192.168.1.191:8090/findings?severity=critical&limit=100'
-```
-
----
-
-## GET /subdomains
-
-List subdomains, optionally filtered by target.
-
-### Request
-
-```
-GET /subdomains?target_id=1&limit=100
-```
-
-| Parameter | Location | Type | Default | Max | Description |
-|---|---|---|---|---|---|
-| `target_id` | query | integer | _(none)_ | — | If provided, return only subdomains for this target. If omitted, return subdomains for all targets. |
-| `limit` | query | integer | `100` | `1000` | Maximum number of rows to return, ordered by `first_seen DESC` |
-
-### Response — 200 OK
-
-```json
-[
-  {
-    "id": 7,
-    "hostname": "api.example.com",
-    "source": "subfinder",
-    "first_seen": "2024-01-16T08:02:00",
-    "last_seen": "2024-01-16T08:02:00",
-    "status": "active",
-    "target_id": 1,
-    "scope_root": "example.com"
-  }
-]
-```
-
-### Example
-
-```bash
-# All subdomains for target 1
-curl 'http://192.168.1.191:8090/subdomains?target_id=1'
-
-# All subdomains across all targets
-curl http://192.168.1.191:8090/subdomains
-```
-
----
-
-## GET /health
-
-Liveness check endpoint. Returns `200 OK` as long as the ingestor process is running.
-
-### Request
-
-```
-GET /health
-```
-
-### Response — 200 OK
-
-```json
-{
-  "status": "ok"
-}
-```
-
-### Example
-
-```bash
-curl http://192.168.1.191:8090/health
-```
-
----
-
-## Error Codes
-
-| HTTP Status | When |
-|---|---|
-| `201 Created` | Target was successfully created or re-enabled |
-| `200 OK` | All other successful requests |
-| `404 Not Found` | `target_id` not found in `DELETE /targets/{target_id}` or `GET /targets/{target_id}/jobs` |
-| `422 Unprocessable Entity` | Request body validation failure — missing required field, wrong type, or domain fails regex validation |
-| `500 Internal Server Error` | Unexpected exception (DB error, Redis unreachable) — check ingestor logs |
+- Base poll interval from control `refresh_interval_secs` (default `5s`)
+- Overlap guard: if a refresh is in-flight, the next poll waits
+- Failure handling: keep last good render, show stale banner, backoff up to `30s`
+- Recovery: backoff resets to selected poll interval after a successful refresh
+- Real-time UI ticks:
+  - relative timestamps update every second
+  - running-job durations update every second
+  - next-refresh countdown updates every second
