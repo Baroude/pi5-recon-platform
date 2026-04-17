@@ -528,6 +528,25 @@
 
   <section>
     <h2>Subdomains <span class="count" id="subdomains-count">0</span></h2>
+    <div class="toolbar">
+      <label class="control" style="min-width:230px">
+        Hostname contains
+        <input type="text" id="subdomains-filter-hostname" placeholder="api.example.com">
+      </label>
+      <label class="control">
+        Target
+        <select id="subdomains-filter-target">
+          <option value="all">all targets</option>
+        </select>
+      </label>
+      <label class="control">
+        Source
+        <select id="subdomains-filter-source">
+          <option value="all">all sources</option>
+        </select>
+      </label>
+      <button class="sm ghost" id="subdomains-filter-clear">Clear</button>
+    </div>
     <div class="tbl-wrap">
       <table>
         <thead><tr>
@@ -539,6 +558,20 @@
         </tr></thead>
         <tbody id="subdomains-tbody"></tbody>
       </table>
+    </div>
+    <div class="toolbar">
+      <label class="control" style="max-width:120px">
+        Page size
+        <select id="subdomains-page-size">
+          <option value="25">25</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+          <option value="200">200</option>
+        </select>
+      </label>
+      <button class="sm ghost" id="subdomains-page-prev">Prev</button>
+      <button class="sm ghost" id="subdomains-page-next">Next</button>
+      <span class="hint" id="subdomains-page-info">Page 1/1</span>
     </div>
   </section>
 </main>
@@ -589,6 +622,15 @@ const state = {
   progress: null,
   findings: [],
   subdomains: [],
+  subdomainsFilters: {
+    hostname_contains: "",
+    target: "all",
+    source: "all",
+  },
+  subdomainsPaging: {
+    page: 1,
+    page_size: 50,
+  },
   dlq: null,
   lastFetchAt: null,
   lastFetchDurationMs: 0,
@@ -1265,15 +1307,26 @@ function renderFindings(rows) {
 }
 
 function renderSubdomains(rows) {
-  document.getElementById("subdomains-count").textContent = `${rows.length}`;
+  const allRows = rows || [];
+  const filtered = applySubdomainFilters(allRows);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / state.subdomainsPaging.page_size));
+  state.subdomainsPaging.page = clamp(state.subdomainsPaging.page, 1, totalPages);
+  const start = (state.subdomainsPaging.page - 1) * state.subdomainsPaging.page_size;
+  const visible = filtered.slice(start, start + state.subdomainsPaging.page_size);
+
+  document.getElementById("subdomains-count").textContent = filtered.length === allRows.length
+    ? `${filtered.length}`
+    : `${filtered.length}/${allRows.length}`;
+
   const tbody = document.getElementById("subdomains-tbody");
 
-  if (!rows.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No subdomains found yet.</td></tr>';
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No subdomains match current filters.</td></tr>';
+    updateSubdomainPager(totalPages, 0, 0, filtered.length);
     return;
   }
 
-  tbody.innerHTML = rows.map((r) => `
+  tbody.innerHTML = visible.map((r) => `
     <tr>
       <td class="mono">${esc(r.hostname)}</td>
       <td class="mono muted">${esc(r.scope_root)}</td>
@@ -1282,6 +1335,74 @@ function renderSubdomains(rows) {
       <td><span class="muted js-rel" data-ts="${escAttr(r.last_seen || "")}" title="${escAttr(ts(r.last_seen))}">${esc(relTs(r.last_seen))}</span></td>
     </tr>
   `).join("");
+
+  updateSubdomainPager(totalPages, start + 1, start + visible.length, filtered.length);
+}
+
+function renderSubdomainFilterOptions(rows) {
+  const targetSel = document.getElementById("subdomains-filter-target");
+  const sourceSel = document.getElementById("subdomains-filter-source");
+  const currentTarget = state.subdomainsFilters.target;
+  const currentSource = state.subdomainsFilters.source;
+
+  const targets = Array.from(new Set((rows || []).map((r) => r.scope_root).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const sources = Array.from(new Set((rows || []).map((r) => r.source).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+
+  targetSel.innerHTML = ['<option value="all">all targets</option>', ...targets.map((v) => `<option value="${escAttr(v)}">${esc(v)}</option>`)].join("");
+  sourceSel.innerHTML = ['<option value="all">all sources</option>', ...sources.map((v) => `<option value="${escAttr(v)}">${esc(v)}</option>`)].join("");
+
+  targetSel.value = currentTarget !== "all" && targets.includes(currentTarget) ? currentTarget : "all";
+  sourceSel.value = currentSource !== "all" && sources.includes(currentSource) ? currentSource : "all";
+  state.subdomainsFilters.target = targetSel.value;
+  state.subdomainsFilters.source = sourceSel.value;
+}
+
+function applySubdomainFilters(rows) {
+  const hostnameContains = (state.subdomainsFilters.hostname_contains || "").toLowerCase().trim();
+  const target = state.subdomainsFilters.target;
+  const source = state.subdomainsFilters.source;
+
+  return (rows || []).filter((r) => {
+    const hostname = String(r.hostname || "").toLowerCase();
+    const scopeRoot = String(r.scope_root || "");
+    const rowSource = String(r.source || "");
+
+    if (hostnameContains && !hostname.includes(hostnameContains)) return false;
+    if (target !== "all" && scopeRoot !== target) return false;
+    if (source !== "all" && rowSource !== source) return false;
+    return true;
+  });
+}
+
+function updateSubdomainPager(totalPages, shownFrom, shownTo, filteredCount) {
+  const prev = document.getElementById("subdomains-page-prev");
+  const next = document.getElementById("subdomains-page-next");
+  const info = document.getElementById("subdomains-page-info");
+  const page = state.subdomainsPaging.page;
+  const size = state.subdomainsPaging.page_size;
+  const hasRows = filteredCount > 0;
+
+  prev.disabled = page <= 1 || !hasRows;
+  next.disabled = page >= totalPages || !hasRows;
+
+  if (!hasRows) {
+    info.textContent = `Page 1/1 | 0 rows`;
+    return;
+  }
+  info.textContent = `Page ${page}/${totalPages} | ${shownFrom}-${shownTo} of ${filteredCount} (size ${size})`;
+}
+
+function applySubdomainFilterControls() {
+  state.subdomainsFilters.hostname_contains = document.getElementById("subdomains-filter-hostname").value;
+  state.subdomainsFilters.target = document.getElementById("subdomains-filter-target").value;
+  state.subdomainsFilters.source = document.getElementById("subdomains-filter-source").value;
+  state.subdomainsPaging.page = 1;
+  if (state.subdomains) renderSubdomains(state.subdomains);
+}
+
+function setSubdomainPage(page) {
+  state.subdomainsPaging.page = Math.max(1, page);
+  if (state.subdomains) renderSubdomains(state.subdomains);
 }
 
 function populateFindingsTargets(targets) {
@@ -1496,6 +1617,34 @@ function bindControls() {
     saveControls();
     await refreshAll(true);
   });
+
+  ["subdomains-filter-hostname", "subdomains-filter-target", "subdomains-filter-source"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", applySubdomainFilterControls);
+    document.getElementById(id).addEventListener("change", applySubdomainFilterControls);
+  });
+
+  document.getElementById("subdomains-filter-clear").addEventListener("click", () => {
+    state.subdomainsFilters = { hostname_contains: "", target: "all", source: "all" };
+    document.getElementById("subdomains-filter-hostname").value = "";
+    document.getElementById("subdomains-filter-target").value = "all";
+    document.getElementById("subdomains-filter-source").value = "all";
+    state.subdomainsPaging.page = 1;
+    if (state.subdomains) renderSubdomains(state.subdomains);
+  });
+
+  document.getElementById("subdomains-page-size").addEventListener("change", () => {
+    state.subdomainsPaging.page_size = clamp(num(document.getElementById("subdomains-page-size").value), 1, 500);
+    state.subdomainsPaging.page = 1;
+    if (state.subdomains) renderSubdomains(state.subdomains);
+  });
+
+  document.getElementById("subdomains-page-prev").addEventListener("click", () => {
+    setSubdomainPage(state.subdomainsPaging.page - 1);
+  });
+
+  document.getElementById("subdomains-page-next").addEventListener("click", () => {
+    setSubdomainPage(state.subdomainsPaging.page + 1);
+  });
 }
 
 async function refreshAll(force = false) {
@@ -1513,7 +1662,7 @@ async function refreshAll(force = false) {
     const [dlq, findings, subdomains] = await Promise.all([
       apiFetch("/admin/dlq"),
       apiFetch(buildFindingsPath()),
-      apiFetch("/subdomains?limit=200"),
+      apiFetch("/subdomains?limit=1000"),
     ]);
 
     state.progress = progress;
@@ -1531,6 +1680,7 @@ async function refreshAll(force = false) {
     renderJobs(progress);
     renderDlq(dlq);
     renderFindings(findings);
+    renderSubdomainFilterOptions(subdomains);
     renderSubdomains(subdomains);
 
     setStale("");
