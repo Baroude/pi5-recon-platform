@@ -202,11 +202,12 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
     ]
     amass_cmd = [
         "amass", "enum",
-        "-passive",
         "-d", domain,
         "-silent",
         "-timeout", str(AMASS_TIMEOUT_MINUTES),
     ]
+    if not active_recon:
+        amass_cmd.insert(2, "-passive")
 
     out_q: thread_queue.Queue = thread_queue.Queue()
     threads = [
