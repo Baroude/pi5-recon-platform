@@ -27,10 +27,10 @@ log "Pulling latest code..."
 git -C "$REPO_DIR" pull --ff-only origin master
 
 log "Rebuilding images..."
-CACHE_BUST="${REMOTE_SHA}" docker compose -f "$REPO_DIR/docker-compose.yml" build --pull
+CACHE_BUST="${REMOTE_SHA}" docker compose -f "$REPO_DIR/docker-compose.yml" -p recon-platform build --pull
 
 log "Restarting containers..."
-CACHE_BUST="${REMOTE_SHA}" docker compose -f "$REPO_DIR/docker-compose.yml" up -d
+CACHE_BUST="${REMOTE_SHA}" docker compose -f "$REPO_DIR/docker-compose.yml" -p recon-platform up -d
 
 echo "${REMOTE_SHA}" > "$LAST_SHA_FILE"
 log "Deploy complete. Stack updated to ${REMOTE_SHA}"
