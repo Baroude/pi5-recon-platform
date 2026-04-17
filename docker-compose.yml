@@ -1,8 +1,7 @@
-version: "3.9"
-
 # ---------------------------------------------------------------------------
 # Raspberry Pi 5 Recon Platform
-# Deploy via Portainer: stack → deploy from git repository or paste this file.
+# Deploy via Portainer: prefer "Deploy from Git repository" so build contexts
+# (ingestor/, workers/) are available during image builds.
 # Run scripts/init-dirs.sh on the Pi first to create bind-mount directories.
 # ---------------------------------------------------------------------------
 
