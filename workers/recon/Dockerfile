@@ -5,16 +5,21 @@
 # ---------------------------------------------------------------------------
 # Pin to specific version — update deliberately after testing
 FROM --platform=linux/arm64 projectdiscovery/subfinder:v2.6.6 AS subfinder-src
-FROM --platform=linux/arm64 ghcr.io/owasp-amass/amass:latest AS amass-src
 
 FROM --platform=linux/arm64 python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates \
+        ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=subfinder-src /usr/local/bin/subfinder /usr/local/bin/subfinder
-COPY --from=amass-src /usr/local/bin/amass /usr/local/bin/amass
+
+# Download amass ARM64 binary directly from GitHub releases (avoids ghcr.io auth issues)
+RUN curl -fsSL https://github.com/owasp-amass/amass/releases/download/v4.2.0/amass_Linux_arm64.zip \
+        -o /tmp/amass.zip \
+    && unzip -j /tmp/amass.zip "amass_Linux_arm64/amass" -d /usr/local/bin/ \
+    && chmod +x /usr/local/bin/amass \
+    && rm /tmp/amass.zip
 
 WORKDIR /app
 
