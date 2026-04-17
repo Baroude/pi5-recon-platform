@@ -49,7 +49,9 @@ app = FastAPI(title="Recon Platform Ingestor", version="1.0")
 _redis: Optional[redis_lib.Redis] = None
 _refresh_thread: Optional[threading.Thread] = None
 
-_DLQ_QUEUES = ["recon_domain", "probe_host", "scan_http", "notify_finding"]
+_DLQ_QUEUES = ["recon_domain", "brute_domain", "probe_host", "scan_http", "notify_finding"]
+
+_ALLOWED_WORDLISTS = {"dns-small.txt", "dns-medium.txt", "dns-large.txt"}
 
 
 def get_r() -> redis_lib.Redis:
@@ -158,6 +160,8 @@ _DOMAIN_RE = re.compile(
 class TargetIn(BaseModel):
     scope_root: str
     notes: Optional[str] = None
+    active_recon: bool = False
+    brute_wordlist: str = "dns-small.txt"
 
     @field_validator("scope_root")
     @classmethod
@@ -170,6 +174,25 @@ class TargetIn(BaseModel):
                 "scope_root must be a valid public domain (e.g. example.com). "
                 "Bare IPs, single-label names, and malformed hostnames are not accepted."
             )
+        return v
+
+    @field_validator("brute_wordlist")
+    @classmethod
+    def validate_wordlist(cls, v: str) -> str:
+        if v not in _ALLOWED_WORDLISTS:
+            raise ValueError(f"brute_wordlist must be one of: {sorted(_ALLOWED_WORDLISTS)}")
+        return v
+
+
+class TargetUpdate(BaseModel):
+    active_recon: Optional[bool] = None
+    brute_wordlist: Optional[str] = None
+
+    @field_validator("brute_wordlist")
+    @classmethod
+    def validate_wordlist(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in _ALLOWED_WORDLISTS:
+            raise ValueError(f"brute_wordlist must be one of: {sorted(_ALLOWED_WORDLISTS)}")
         return v
 
 
@@ -426,13 +449,14 @@ def add_target(body: TargetIn):
                 raise HTTPException(status_code=409, detail="Target already exists")
         else:
             target_id = conn.execute(
-                "INSERT INTO targets (scope_root, notes) VALUES (?, ?)",
-                (body.scope_root, body.notes),
+                "INSERT INTO targets (scope_root, notes, active_recon, brute_wordlist) VALUES (?, ?, ?, ?)",
+                (body.scope_root, body.notes, body.active_recon, body.brute_wordlist),
             ).lastrowid
             logger.info("Added target %s (id=%d)", body.scope_root, target_id)
 
     enqueue(get_r(), "recon_domain", {"domain": body.scope_root})
-    return {"id": target_id, "scope_root": body.scope_root, "queued": True}
+    return {"id": target_id, "scope_root": body.scope_root, "queued": True,
+            "active_recon": body.active_recon, "brute_wordlist": body.brute_wordlist}
 
 
 @app.get("/targets")
@@ -441,6 +465,7 @@ def list_targets():
         rows = conn.execute(
             """
             SELECT t.id, t.scope_root, t.created_at, t.enabled, t.notes,
+                   t.active_recon, t.brute_wordlist,
                    (SELECT COUNT(*) FROM subdomains s WHERE s.target_id = t.id) AS subdomain_count,
                    (SELECT MAX(j.finished_at) FROM jobs j
                     WHERE j.target_ref = t.scope_root AND j.status = 'done') AS last_recon
@@ -449,6 +474,34 @@ def list_targets():
             """
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+@app.patch("/targets/{target_id}", status_code=200)
+def update_target(target_id: int, body: TargetUpdate):
+    with db_conn() as conn:
+        row = conn.execute("SELECT id FROM targets WHERE id = ?", (target_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Target not found")
+
+        updates = {}
+        if body.active_recon is not None:
+            updates["active_recon"] = body.active_recon
+        if body.brute_wordlist is not None:
+            updates["brute_wordlist"] = body.brute_wordlist
+
+        if not updates:
+            raise HTTPException(status_code=422, detail="No fields to update")
+
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [target_id]
+        conn.execute(f"UPDATE targets SET {set_clause} WHERE id = ?", values)
+        logger.info("Updated target %d: %s", target_id, updates)
+
+        updated = conn.execute(
+            "SELECT id, scope_root, active_recon, brute_wordlist, enabled FROM targets WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+    return dict(updated)
 
 
 @app.delete("/targets/{target_id}", status_code=200)
