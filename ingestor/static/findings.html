@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recon Platform | Findings</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="/ui/app.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body data-page="findings">
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="/ui/index.html">
+          <span class="brand-mark">R</span>
+          <span>Recon</span>
+        </a>
+        <nav class="nav-links" aria-label="Primary">
+          <a href="/ui/index.html">Dashboard</a>
+          <a class="is-active" href="/ui/findings.html">Findings</a>
+          <a href="/ui/targets.html">Targets</a>
+          <a href="/ui/ops.html">Ops</a>
+        </nav>
+        <div class="status-meta">
+          <span class="status-dot warn"></span>
+          <span id="last-updated">Waiting for data</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div id="page-message" class="message" role="status" aria-live="polite"></div>
+      <div id="stale-banner" class="message error stale-banner" role="alert"></div>
+
+      <section class="hero">
+        <span class="eyebrow">Triage Queue</span>
+        <div class="hero-row">
+          <div>
+            <h1>Keep findings moving</h1>
+            <p>This page is optimized for fast triage: filter aggressively, mark findings inline, and open the side panel only when you need the raw detail. The default view starts with open findings from the last 24 hours.</p>
+          </div>
+          <div class="hero-actions">
+            <a href="/ui/index.html" role="button" class="secondary">Back to dashboard</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Filters</h2>
+            <p>Severity and status accept multiple selections. Time window `all` omits the query entirely.</p>
+          </div>
+          <div class="panel-meta" id="findings-count">0 visible</div>
+        </div>
+
+        <form id="findings-filters" class="filters compact">
+          <label>
+            Severity
+            <select id="filter-severity" multiple size="5">
+              <option value="critical">critical</option>
+              <option value="high">high</option>
+              <option value="medium">medium</option>
+              <option value="low">low</option>
+              <option value="info">info</option>
+            </select>
+          </label>
+          <label>
+            Status
+            <select id="filter-status" multiple size="4">
+              <option value="open">open</option>
+              <option value="triaged">triaged</option>
+              <option value="false_positive">false_positive</option>
+              <option value="fixed">fixed</option>
+            </select>
+          </label>
+          <label>
+            Target
+            <select id="filter-target"></select>
+          </label>
+          <label>
+            Window
+            <select id="filter-window">
+              <option value="1">1 hour</option>
+              <option value="24">24 hours</option>
+              <option value="168">7 days</option>
+              <option value="all">all</option>
+            </select>
+          </label>
+          <label>
+            Sort
+            <select id="filter-sort">
+              <option value="matched_desc">Newest first</option>
+              <option value="matched_asc">Oldest first</option>
+              <option value="severity_desc">Severity high to low</option>
+              <option value="severity_asc">Severity low to high</option>
+            </select>
+          </label>
+          <div class="toolbar-actions">
+            <button type="submit">Apply</button>
+            <button type="button" id="filter-reset" class="secondary">Reset</button>
+          </div>
+        </form>
+      </section>
+
+      <div class="split-grid">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Findings table</h2>
+              <p>Click a row for full detail. Inline buttons update status without leaving the list.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Severity</th>
+                  <th>Title</th>
+                  <th>Observed</th>
+                  <th>Target</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="findings-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <aside id="finding-detail" class="panel finding-detail">
+          <div class="header-compact">
+            <div>
+              <h2 class="panel-title">Finding detail</h2>
+              <p class="muted">Template, URL, raw event, and status update.</p>
+            </div>
+            <button type="button" id="detail-close" class="secondary">Close</button>
+          </div>
+          <div id="finding-detail-content" class="detail-meta">
+            <div class="empty-state">Select a finding row to inspect its detail.</div>
+          </div>
+          <label>
+            Update status
+            <select id="detail-status">
+              <option value="open">open</option>
+              <option value="triaged">triaged</option>
+              <option value="false_positive">false_positive</option>
+              <option value="fixed">fixed</option>
+            </select>
+          </label>
+          <button type="button" id="detail-save">Save status</button>
+        </aside>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

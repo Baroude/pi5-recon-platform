@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recon Platform | Ops</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="/ui/app.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body data-page="ops">
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="/ui/index.html">
+          <span class="brand-mark">R</span>
+          <span>Recon</span>
+        </a>
+        <nav class="nav-links" aria-label="Primary">
+          <a href="/ui/index.html">Dashboard</a>
+          <a href="/ui/findings.html">Findings</a>
+          <a href="/ui/targets.html">Targets</a>
+          <a class="is-active" href="/ui/ops.html">Ops</a>
+        </nav>
+        <div class="status-meta">
+          <span class="status-dot bad"></span>
+          <span id="last-updated">Waiting for data</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div id="page-message" class="message" role="status" aria-live="polite"></div>
+      <div id="stale-banner" class="message error stale-banner" role="alert"></div>
+
+      <section class="hero">
+        <span class="eyebrow">Recovery Console</span>
+        <div class="hero-row">
+          <div>
+            <h1>Queues, DLQ, and failed jobs in one place</h1>
+            <p>The Ops page is for recovery work. Queue depth and worker freshness refresh every 15 seconds; DLQ contents refresh only on explicit action so a requeue or dismiss is always operating on the raw payload you just saw.</p>
+          </div>
+          <div class="hero-actions">
+            <a href="/ui/index.html" role="button" class="secondary">Back to dashboard</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Worker health</h2>
+            <p>Derived from recent job activity.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Worker</th>
+                <th>Health</th>
+                <th>Last job</th>
+                <th>Last status</th>
+                <th>Last seen</th>
+              </tr>
+            </thead>
+            <tbody id="ops-worker-health-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Queue depths</h2>
+            <p>Live depth for work queues and their DLQs.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Queue</th>
+                <th>Health</th>
+                <th>Pending</th>
+                <th>Processing</th>
+                <th>DLQ</th>
+              </tr>
+            </thead>
+            <tbody id="queue-depths-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Dead-letter queues</h2>
+            <p>Actions are keyed by the exact raw Redis payload returned from the API.</p>
+          </div>
+        </div>
+        <div id="dlq-list" class="accordion-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Failed jobs</h2>
+            <p>Recent `failed_jobs` rows with parsed payload previews.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Target</th>
+                <th>Reason</th>
+                <th>Retries</th>
+                <th>Failed at</th>
+                <th>Payload</th>
+              </tr>
+            </thead>
+            <tbody id="failed-jobs-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

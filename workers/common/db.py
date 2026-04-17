@@ -71,6 +71,8 @@ CREATE TABLE IF NOT EXISTS findings (
     scanner       TEXT    NOT NULL DEFAULT 'nuclei',
     template_id   TEXT,
     severity      TEXT,
+    status        TEXT    NOT NULL DEFAULT 'open'
+                           CHECK(status IN ('open', 'triaged', 'false_positive', 'fixed')),
     title         TEXT,
     matched_at    TEXT,
     first_seen    TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -138,6 +140,15 @@ def init_db(path: str = None) -> None:
     try:
         conn.execute(
             "ALTER TABLE targets ADD COLUMN nuclei_template TEXT NOT NULL DEFAULT 'all'"
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        conn.execute(
+            "ALTER TABLE findings ADD COLUMN status TEXT NOT NULL DEFAULT 'open' "
+            "CHECK(status IN ('open', 'triaged', 'false_positive', 'fixed'))"
         )
         conn.commit()
     except sqlite3.OperationalError:

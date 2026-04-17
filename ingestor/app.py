@@ -5,14 +5,19 @@ Endpoints
 ---------
   GET  /admin/meta           Dashboard control metadata (limits/defaults/options).
   GET  /admin/progress       Consolidated progress snapshot for UI rendering.
+  GET  /admin/failed-jobs    Recent failed jobs for Ops UI.
+  GET  /admin/dlq            DLQ depths plus recent raw payloads.
+  POST /admin/dlq/{queue}/requeue  Requeue one DLQ item by exact raw payload.
+  POST /admin/dlq/{queue}/dismiss  Remove one DLQ item by exact raw payload.
   POST /targets              Add a new scope root; enqueues first recon job.
   GET  /targets              List all targets with last-seen job status.
   PATCH /targets/{id}        Update target scan configuration.
   POST /targets/{id}/run     Trigger an immediate recon enqueue for a target.
   DELETE /targets/{id}       Disable a target (sets enabled=0).
   GET  /targets/{id}/jobs    Recent jobs for a target.
-  GET  /findings             Recent findings (supports severity/target/window filters).
+  GET  /findings             Recent findings (supports severity/status/target/window filters).
   GET  /findings/{id}        Full finding details with best-effort raw nuclei event.
+  PATCH /findings/{id}       Update finding triage status.
   GET  /health               Liveness probe.
 """
 
@@ -24,7 +29,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 import redis as redis_lib
 from fastapi import FastAPI, HTTPException, Query
@@ -70,6 +75,8 @@ _redis: Optional[redis_lib.Redis] = None
 _refresh_thread: Optional[threading.Thread] = None
 
 _DLQ_QUEUES = ["recon_domain", "brute_domain", "probe_host", "scan_http", "notify_finding"]
+_ALLOWED_FINDING_STATUSES = {"open", "triaged", "false_positive", "fixed"}
+_ALLOWED_FINDING_SEVERITIES = {"critical", "high", "medium", "low", "info"}
 
 _ALLOWED_WORDLISTS = {"dns-small.txt", "dns-medium.txt", "dns-large.txt"}
 _DEFAULT_ALLOWED_NUCLEI_TEMPLATES = {
@@ -148,6 +155,62 @@ def _load_raw_event_for_finding(row: dict) -> tuple[Optional[dict], Optional[str
         return fallback_event, "Exact event match not found; showing first event with the same template-id."
 
     return None, "No matching event found in raw blob."
+
+
+def _redis_value_to_text(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _decode_json_payload(raw: Any) -> Any:
+    try:
+        return json.loads(_redis_value_to_text(raw))
+    except Exception:
+        return None
+
+
+def _decode_json_text(raw_text: Optional[str]) -> Any:
+    if raw_text is None:
+        return None
+    try:
+        return json.loads(raw_text)
+    except Exception:
+        return None
+
+
+def _validate_queue_name(queue: str) -> str:
+    if queue not in _DLQ_QUEUES:
+        raise HTTPException(status_code=404, detail="Unknown queue")
+    return queue
+
+
+def _parse_csv_values(raw_value: Optional[str], *, allowed: Optional[set[str]] = None, field_name: str) -> list[str]:
+    if not raw_value:
+        return []
+
+    values = [item.strip().lower() for item in raw_value.split(",") if item.strip()]
+    if not values:
+        return []
+
+    invalid = sorted({value for value in values if allowed is not None and value not in allowed})
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}: {', '.join(invalid)}")
+    return values
+
+
+def _append_in_clause(base_name: str, values: list[str], params: dict[str, Any]) -> str:
+    placeholders = []
+    for idx, value in enumerate(values):
+        key = f"{base_name}_{idx}"
+        params[key] = value
+        placeholders.append(f":{key}")
+    return ", ".join(placeholders)
+
+
+def _serialize_dlq_entry(raw_item: Any) -> dict[str, Any]:
+    raw_text = _redis_value_to_text(raw_item)
+    return {"raw": raw_text, "payload": _decode_json_text(raw_text)}
 
 
 def get_r() -> redis_lib.Redis:
@@ -292,9 +355,26 @@ class TargetIn(BaseModel):
 
 
 class TargetUpdate(BaseModel):
+    scope_root: Optional[str] = None
+    notes: Optional[str] = None
     active_recon: Optional[bool] = None
     brute_wordlist: Optional[str] = None
     nuclei_template: Optional[str] = None
+
+    @field_validator("scope_root")
+    @classmethod
+    def normalise_scope_root(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        cleaned = v.strip().lower().lstrip("*.")
+        if not cleaned:
+            raise ValueError("scope_root must not be empty")
+        if not _DOMAIN_RE.match(cleaned):
+            raise ValueError(
+                "scope_root must be a valid public domain (e.g. example.com). "
+                "Bare IPs, single-label names, and malformed hostnames are not accepted."
+            )
+        return cleaned
 
     @field_validator("brute_wordlist")
     @classmethod
@@ -309,6 +389,18 @@ class TargetUpdate(BaseModel):
         if v is not None and v not in _ALLOWED_NUCLEI_TEMPLATES:
             raise ValueError(f"nuclei_template must be one of: {sorted(_ALLOWED_NUCLEI_TEMPLATES)}")
         return v
+
+
+class DlqActionRequest(BaseModel):
+    raw: str
+
+    @field_validator("raw")
+    @classmethod
+    def validate_raw(cls, v: str) -> str:
+        value = v.strip()
+        if not value:
+            raise ValueError("raw must not be empty")
+        return value
 
 
 # ---------------------------------------------------------------------------
@@ -360,13 +452,48 @@ def dlq_status():
         key = f"dlq:{q}"
         depth = r.llen(key)
         raw_items = r.lrange(key, 0, 9)
-        parsed = []
-        for raw in raw_items:
-            try:
-                parsed.append(json.loads(raw))
-            except Exception:
-                parsed.append({"raw": raw})
-        result[q] = {"depth": depth, "recent": parsed}
+        result[q] = {"depth": depth, "recent": [_serialize_dlq_entry(raw) for raw in raw_items]}
+    return result
+
+
+@app.post("/admin/dlq/{queue}/requeue")
+def requeue_dlq_item(queue: str, body: DlqActionRequest):
+    queue_name = _validate_queue_name(queue)
+    r = get_r()
+    removed = r.lrem(f"dlq:{queue_name}", 1, body.raw)
+    if not removed:
+        raise HTTPException(status_code=404, detail="DLQ entry not found")
+    r.rpush(queue_name, body.raw)
+    return {"requeued": True, "queue": queue_name}
+
+
+@app.post("/admin/dlq/{queue}/dismiss")
+def dismiss_dlq_item(queue: str, body: DlqActionRequest):
+    queue_name = _validate_queue_name(queue)
+    removed = get_r().lrem(f"dlq:{queue_name}", 1, body.raw)
+    if not removed:
+        raise HTTPException(status_code=404, detail="DLQ entry not found")
+    return {"dismissed": True}
+
+
+@app.get("/admin/failed-jobs")
+def list_failed_jobs(limit: int = Query(default=100, ge=1, le=500)):
+    with db_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, type, target_ref, payload, failure_reason, retry_count, failed_at
+            FROM failed_jobs
+            ORDER BY failed_at DESC, id DESC
+            LIMIT :lim
+            """,
+            {"lim": limit},
+        ).fetchall()
+
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["payload"] = _decode_json_text(item.get("payload"))
+        result.append(item)
     return result
 
 
@@ -433,8 +560,12 @@ def progress_snapshot(
                   (SELECT COUNT(*) FROM endpoints) AS endpoints_total,
                   (SELECT COUNT(*) FROM endpoints WHERE alive = 1) AS endpoints_live,
                   (SELECT COUNT(*) FROM findings) AS findings_total,
+                  (SELECT COUNT(*) FROM findings WHERE status = 'open') AS findings_open_total,
                   (SELECT COUNT(*) FROM findings
                    WHERE first_seen > datetime('now', :window || ' hours')) AS findings_window,
+                  (SELECT COUNT(*) FROM findings
+                   WHERE status = 'open'
+                     AND first_seen > datetime('now', :window || ' hours')) AS findings_open_window,
                   (SELECT COUNT(*) FROM jobs WHERE status = 'running') AS jobs_running,
                   (SELECT MIN(started_at)
                    FROM jobs
@@ -495,6 +626,7 @@ def progress_snapshot(
                 COALESCE(sd.subdomain_count, 0) AS subdomain_count,
                 COALESCE(ep.live_endpoint_count, 0) AS live_endpoint_count,
                 COALESCE(fd.finding_count, 0) AS finding_count,
+                COALESCE(fd.finding_open_count, 0) AS finding_open_count,
                 (
                   SELECT MAX(j.finished_at)
                   FROM jobs j
@@ -538,7 +670,10 @@ def progress_snapshot(
                 GROUP BY s.target_id
               ) ep ON ep.target_id = t.id
               LEFT JOIN (
-                SELECT s.target_id, COUNT(*) AS finding_count
+                SELECT
+                  s.target_id,
+                  COUNT(*) AS finding_count,
+                  SUM(CASE WHEN f.status = 'open' THEN 1 ELSE 0 END) AS finding_open_count
                 FROM findings f
                 JOIN endpoints e ON e.id = f.endpoint_id
                 JOIN subdomains s ON s.id = e.subdomain_id
@@ -644,6 +779,15 @@ def list_targets():
             SELECT t.id, t.scope_root, t.created_at, t.enabled, t.notes,
                    t.active_recon, t.brute_wordlist, t.nuclei_template,
                    (SELECT COUNT(*) FROM subdomains s WHERE s.target_id = t.id) AS subdomain_count,
+                   (SELECT COUNT(*)
+                    FROM findings f
+                    JOIN endpoints e ON e.id = f.endpoint_id
+                    JOIN subdomains s ON s.id = e.subdomain_id
+                    WHERE s.target_id = t.id AND f.status = 'open') AS finding_open_count,
+                   (SELECT COUNT(*)
+                    FROM endpoints e
+                    JOIN subdomains s ON s.id = e.subdomain_id
+                    WHERE s.target_id = t.id AND e.alive = 1) AS live_endpoint_count,
                    (SELECT MAX(j.finished_at) FROM jobs j
                     WHERE j.target_ref = t.scope_root AND j.status = 'done') AS last_recon
             FROM targets t
@@ -656,11 +800,24 @@ def list_targets():
 @app.patch("/targets/{target_id}", status_code=200)
 def update_target(target_id: int, body: TargetUpdate):
     with db_conn() as conn:
-        row = conn.execute("SELECT id FROM targets WHERE id = ?", (target_id,)).fetchone()
+        row = conn.execute(
+            "SELECT id, scope_root FROM targets WHERE id = ?",
+            (target_id,),
+        ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Target not found")
 
         updates = {}
+        if body.scope_root is not None:
+            existing = conn.execute(
+                "SELECT id FROM targets WHERE scope_root = ? AND id != ?",
+                (body.scope_root, target_id),
+            ).fetchone()
+            if existing:
+                raise HTTPException(status_code=409, detail="Target already exists")
+            updates["scope_root"] = body.scope_root
+        if body.notes is not None:
+            updates["notes"] = body.notes
         if body.active_recon is not None:
             updates["active_recon"] = body.active_recon
         if body.brute_wordlist is not None:
@@ -674,10 +831,21 @@ def update_target(target_id: int, body: TargetUpdate):
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [target_id]
         conn.execute(f"UPDATE targets SET {set_clause} WHERE id = ?", values)
+        if "scope_root" in updates:
+            old_scope_root = row["scope_root"]
+            new_scope_root = updates["scope_root"]
+            conn.execute(
+                "UPDATE jobs SET target_ref = ? WHERE target_ref = ?",
+                (new_scope_root, old_scope_root),
+            )
+            conn.execute(
+                "UPDATE failed_jobs SET target_ref = ? WHERE target_ref = ?",
+                (new_scope_root, old_scope_root),
+            )
         logger.info("Updated target %d: %s", target_id, updates)
 
         updated = conn.execute(
-            "SELECT id, scope_root, active_recon, brute_wordlist, nuclei_template, enabled FROM targets WHERE id = ?",
+            "SELECT id, scope_root, notes, active_recon, brute_wordlist, nuclei_template, enabled FROM targets WHERE id = ?",
             (target_id,),
         ).fetchone()
     return dict(updated)
@@ -740,31 +908,51 @@ def target_jobs(target_id: int, limit: int = Query(default=20, le=100)):
 @app.get("/findings")
 def list_findings(
     severity: Optional[str] = None,
+    status: Optional[str] = None,
     target_id: Optional[int] = None,
     window_hours: Optional[int] = Query(default=None, ge=WINDOW_HOURS_BOUNDS[0], le=WINDOW_HOURS_BOUNDS[1]),
     limit: int = Query(default=50, le=500),
 ):
-    severity_filter = "AND f.severity = :sev" if severity else ""
+    params: dict[str, Any] = {
+        "tid": target_id,
+        "window": f"-{window_hours}" if window_hours else None,
+        "lim": limit,
+    }
+
+    severity_values = _parse_csv_values(
+        severity,
+        allowed=_ALLOWED_FINDING_SEVERITIES,
+        field_name="severity",
+    )
+    status_values = _parse_csv_values(
+        status,
+        allowed=_ALLOWED_FINDING_STATUSES,
+        field_name="status",
+    )
+
+    severity_filter = ""
+    if severity_values:
+        severity_filter = f"AND f.severity IN ({_append_in_clause('severity', severity_values, params)})"
+
+    status_filter = ""
+    if status_values:
+        status_filter = f"AND f.status IN ({_append_in_clause('status', status_values, params)})"
+
     target_filter = "AND t.id = :tid" if target_id else ""
     window_filter = "AND f.first_seen > datetime('now', :window || ' hours')" if window_hours else ""
     with db_conn() as conn:
         rows = conn.execute(
             f"""
-            SELECT f.id, f.template_id, f.severity, f.title, f.matched_at,
-                   f.first_seen, e.url, e.host, t.scope_root
+            SELECT f.id, f.template_id, f.severity, f.status, f.title, f.matched_at,
+                   f.first_seen, e.url, e.host, t.id AS target_id, t.scope_root
             FROM findings f
             JOIN endpoints e ON e.id = f.endpoint_id
             JOIN subdomains s ON s.id = e.subdomain_id
             JOIN targets t ON t.id = s.target_id
-            WHERE 1=1 {severity_filter} {target_filter} {window_filter}
+            WHERE 1=1 {severity_filter} {status_filter} {target_filter} {window_filter}
             ORDER BY f.first_seen DESC LIMIT :lim
             """,
-            {
-                "sev": severity,
-                "tid": target_id,
-                "window": f"-{window_hours}" if window_hours else None,
-                "lim": limit,
-            },
+            params,
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -774,7 +962,7 @@ def get_finding_detail(finding_id: int):
     with db_conn() as conn:
         row = conn.execute(
             """
-            SELECT f.id, f.endpoint_id, f.scanner, f.template_id, f.severity, f.title, f.matched_at,
+            SELECT f.id, f.endpoint_id, f.scanner, f.template_id, f.severity, f.status, f.title, f.matched_at,
                    f.first_seen, f.last_seen, f.raw_blob_path, f.dedupe_key,
                    e.url, e.host, e.scheme, e.port, e.status_code, e.technologies,
                    s.hostname,
@@ -796,6 +984,26 @@ def get_finding_detail(finding_id: int):
     detail["raw_event"] = raw_event
     detail["raw_event_error"] = raw_event_error
     return detail
+
+
+@app.patch("/findings/{finding_id}")
+def update_finding_status(finding_id: int, body: dict[str, str]):
+    status = str(body.get("status", "")).strip().lower()
+    if status not in _ALLOWED_FINDING_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status must be one of: {sorted(_ALLOWED_FINDING_STATUSES)}",
+        )
+
+    with db_conn() as conn:
+        existing = conn.execute("SELECT id FROM findings WHERE id = ?", (finding_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Finding not found")
+        conn.execute(
+            "UPDATE findings SET status = ? WHERE id = ?",
+            (status, finding_id),
+        )
+    return get_finding_detail(finding_id)
 
 
 @app.get("/subdomains")

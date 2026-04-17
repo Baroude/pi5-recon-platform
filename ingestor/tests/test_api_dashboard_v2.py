@@ -49,6 +49,41 @@ class FakeRedis:
             end = len(values) - 1
         return values[start:end + 1]
 
+    def rpush(self, key, *values):
+        bucket = self.lists.setdefault(key, [])
+        bucket.extend(values)
+        return len(bucket)
+
+    def lrem(self, key, count, value):
+        values = list(self.lists.get(key, []))
+        removed = 0
+        remaining = []
+
+        if count == 0:
+            for item in values:
+                if item == value:
+                    removed += 1
+                else:
+                    remaining.append(item)
+        elif count > 0:
+            for item in values:
+                if item == value and removed < count:
+                    removed += 1
+                    continue
+                remaining.append(item)
+        else:
+            to_remove = abs(count)
+            reversed_remaining = []
+            for item in reversed(values):
+                if item == value and removed < to_remove:
+                    removed += 1
+                    continue
+                reversed_remaining.append(item)
+            remaining = list(reversed(reversed_remaining))
+
+        self.lists[key] = remaining
+        return removed
+
 
 @pytest.fixture
 def app_ctx(tmp_path, monkeypatch):
@@ -105,6 +140,19 @@ def _insert_target(
             """,
             (scope_root, enabled, "note", active_recon, wordlist, nuclei_template),
         ).lastrowid
+
+
+def _insert_endpoint(ingestor_app, target_id, hostname):
+    with ingestor_app.db_conn() as conn:
+        subdomain_id = conn.execute(
+            "INSERT INTO subdomains (target_id, hostname, source) VALUES (?, ?, ?)",
+            (target_id, hostname, "seed"),
+        ).lastrowid
+        endpoint_id = conn.execute(
+            "INSERT INTO endpoints (subdomain_id, url, host, alive) VALUES (?, ?, ?, 1)",
+            (subdomain_id, f"https://{hostname}", hostname),
+        ).lastrowid
+    return endpoint_id
 
 
 def test_run_target_now_enqueues_for_enabled_target(client):
@@ -194,6 +242,8 @@ def test_progress_contains_target_schedule_and_throughput_fields(client):
     assert "overview" in body
     assert "oldest_running_started_at" in body["overview"]
     assert "last_job_finished_at" in body["overview"]
+    assert "findings_open_total" in body["overview"]
+    assert "findings_open_window" in body["overview"]
 
     recon_stage = body["pipeline"]["recon_domain"]
     assert isinstance(recon_stage["done_per_hour_window"], float)
@@ -206,6 +256,7 @@ def test_progress_contains_target_schedule_and_throughput_fields(client):
     assert "next_recon_due_at" in target
     assert "next_recon_in_secs" in target
     assert "is_recon_overdue" in target
+    assert "finding_open_count" in target
     assert isinstance(target["next_recon_in_secs"], int)
 
 
@@ -230,67 +281,194 @@ def test_target_create_update_and_list_include_nuclei_template(client):
     target_id = created["id"]
     patch_res = test_client.patch(
         f"/targets/{target_id}",
-        json={"nuclei_template": "dns"},
+        json={
+            "scope_root": "renamed.example.com",
+            "notes": "Updated note",
+            "nuclei_template": "dns",
+        },
     )
     assert patch_res.status_code == 200
     assert patch_res.json()["nuclei_template"] == "dns"
+    assert patch_res.json()["scope_root"] == "renamed.example.com"
+    assert patch_res.json()["notes"] == "Updated note"
 
     list_res = test_client.get("/targets")
     assert list_res.status_code == 200
     row = next(t for t in list_res.json() if t["id"] == target_id)
     assert row["nuclei_template"] == "dns"
+    assert row["scope_root"] == "renamed.example.com"
+    assert row["notes"] == "Updated note"
 
 
-def test_findings_supports_severity_target_and_window_filters(client):
+def test_findings_support_csv_severity_status_target_and_window_filters(client):
     test_client, ingestor_app, _, _ = client
     t1 = _insert_target(ingestor_app, scope_root="alpha.example.com")
     t2 = _insert_target(ingestor_app, scope_root="beta.example.com")
+    e1 = _insert_endpoint(ingestor_app, t1, "api.alpha.example.com")
+    e2 = _insert_endpoint(ingestor_app, t2, "api.beta.example.com")
 
     with ingestor_app.db_conn() as conn:
-        s1 = conn.execute(
-            "INSERT INTO subdomains (target_id, hostname, source) VALUES (?, ?, ?)",
-            (t1, "api.alpha.example.com", "seed"),
-        ).lastrowid
-        s2 = conn.execute(
-            "INSERT INTO subdomains (target_id, hostname, source) VALUES (?, ?, ?)",
-            (t2, "api.beta.example.com", "seed"),
-        ).lastrowid
-
-        e1 = conn.execute(
-            "INSERT INTO endpoints (subdomain_id, url, host, alive) VALUES (?, ?, ?, 1)",
-            (s1, "https://api.alpha.example.com", "api.alpha.example.com"),
-        ).lastrowid
-        e2 = conn.execute(
-            "INSERT INTO endpoints (subdomain_id, url, host, alive) VALUES (?, ?, ?, 1)",
-            (s2, "https://api.beta.example.com", "api.beta.example.com"),
-        ).lastrowid
-
         conn.execute(
             """
-            INSERT INTO findings (endpoint_id, severity, title, first_seen, matched_at, dedupe_key)
-            VALUES (?, 'high', 'alpha finding', datetime('now', '-2 hours'), 'https://api.alpha.example.com', 'k1')
+            INSERT INTO findings (endpoint_id, severity, status, title, first_seen, matched_at, dedupe_key)
+            VALUES (?, 'high', 'open', 'alpha finding', datetime('now', '-2 hours'), 'https://api.alpha.example.com', 'k1')
             """,
             (e1,),
         )
         conn.execute(
             """
-            INSERT INTO findings (endpoint_id, severity, title, first_seen, matched_at, dedupe_key)
-            VALUES (?, 'high', 'old beta finding', datetime('now', '-48 hours'), 'https://api.beta.example.com', 'k2')
+            INSERT INTO findings (endpoint_id, severity, status, title, first_seen, matched_at, dedupe_key)
+            VALUES (?, 'high', 'false_positive', 'old beta finding', datetime('now', '-48 hours'), 'https://api.beta.example.com', 'k2')
             """,
             (e2,),
         )
         conn.execute(
             """
-            INSERT INTO findings (endpoint_id, severity, title, first_seen, matched_at, dedupe_key)
-            VALUES (?, 'low', 'alpha low finding', datetime('now', '-1 hours'), 'https://api.alpha.example.com', 'k3')
+            INSERT INTO findings (endpoint_id, severity, status, title, first_seen, matched_at, dedupe_key)
+            VALUES (?, 'low', 'triaged', 'alpha low finding', datetime('now', '-1 hours'), 'https://api.alpha.example.com', 'k3')
             """,
             (e1,),
         )
 
-    res = test_client.get(f"/findings?severity=high&target_id={t1}&window_hours=24&limit=50")
+    res = test_client.get(
+        f"/findings?severity=high,critical&status=open,triaged&target_id={t1}&window_hours=24&limit=50"
+    )
     assert res.status_code == 200
     rows = res.json()
     assert len(rows) == 1
     assert rows[0]["title"] == "alpha finding"
     assert rows[0]["severity"] == "high"
+    assert rows[0]["status"] == "open"
     assert rows[0]["scope_root"] == "alpha.example.com"
+
+
+def test_get_finding_detail_and_patch_include_status(client):
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="detail.example.com")
+    endpoint_id = _insert_endpoint(ingestor_app, target_id, "app.detail.example.com")
+
+    with ingestor_app.db_conn() as conn:
+        finding_id = conn.execute(
+            """
+            INSERT INTO findings (endpoint_id, severity, status, title, matched_at, dedupe_key)
+            VALUES (?, 'medium', 'open', 'detail finding', 'https://app.detail.example.com', 'detail-key')
+            """,
+            (endpoint_id,),
+        ).lastrowid
+
+    detail_res = test_client.get(f"/findings/{finding_id}")
+    assert detail_res.status_code == 200
+    assert detail_res.json()["status"] == "open"
+
+    patch_res = test_client.patch(f"/findings/{finding_id}", json={"status": "fixed"})
+    assert patch_res.status_code == 200
+    assert patch_res.json()["status"] == "fixed"
+
+    confirm_res = test_client.get(f"/findings/{finding_id}")
+    assert confirm_res.status_code == 200
+    assert confirm_res.json()["status"] == "fixed"
+
+
+def test_patch_finding_rejects_invalid_status(client):
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="invalid-status.example.com")
+    endpoint_id = _insert_endpoint(ingestor_app, target_id, "api.invalid-status.example.com")
+
+    with ingestor_app.db_conn() as conn:
+        finding_id = conn.execute(
+            """
+            INSERT INTO findings (endpoint_id, severity, status, title, matched_at, dedupe_key)
+            VALUES (?, 'low', 'open', 'invalid status finding', 'https://api.invalid-status.example.com', 'invalid-status-key')
+            """,
+            (endpoint_id,),
+        ).lastrowid
+
+    patch_res = test_client.patch(f"/findings/{finding_id}", json={"status": "ignored"})
+    assert patch_res.status_code == 400
+
+
+def test_admin_dlq_returns_raw_and_payload_and_supports_requeue(client):
+    test_client, _, fake_redis, _ = client
+    raw = '{"hostname":"sub.example.com","retry_count":2}'
+    fake_redis.rpush("dlq:recon_domain", raw)
+
+    status_res = test_client.get("/admin/dlq")
+    assert status_res.status_code == 200
+    recent = status_res.json()["recon_domain"]["recent"]
+    assert recent == [{"raw": raw, "payload": {"hostname": "sub.example.com", "retry_count": 2}}]
+
+    requeue_res = test_client.post("/admin/dlq/recon_domain/requeue", json={"raw": raw})
+    assert requeue_res.status_code == 200
+    assert requeue_res.json() == {"requeued": True, "queue": "recon_domain"}
+    assert fake_redis.lists["dlq:recon_domain"] == []
+    assert fake_redis.lists["recon_domain"] == [raw]
+
+
+def test_admin_dlq_dismiss_404s_when_entry_missing(client):
+    test_client, _, fake_redis, _ = client
+    fake_redis.rpush("dlq:scan_http", '{"url":"https://stale.example.com"}')
+
+    dismiss_res = test_client.post(
+        "/admin/dlq/scan_http/dismiss",
+        json={"raw": '{"url":"https://missing.example.com"}'},
+    )
+    assert dismiss_res.status_code == 404
+    assert fake_redis.lists["dlq:scan_http"] == ['{"url":"https://stale.example.com"}']
+
+
+def test_admin_failed_jobs_returns_parsed_payload(client):
+    test_client, ingestor_app, _, _ = client
+
+    with ingestor_app.db_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO failed_jobs (type, target_ref, payload, failure_reason, retry_count, failed_at)
+            VALUES ('scan_http', 'corp.example.com', '{"url":"https://corp.example.com","attempt":3}', 'timeout', 2, datetime('now', '-5 minutes'))
+            """
+        )
+
+    res = test_client.get("/admin/failed-jobs?limit=100")
+    assert res.status_code == 200
+    rows = res.json()
+    assert len(rows) == 1
+    assert rows[0]["type"] == "scan_http"
+    assert rows[0]["failure_reason"] == "timeout"
+    assert rows[0]["payload"] == {"url": "https://corp.example.com", "attempt": 3}
+
+
+def test_progress_counts_only_open_findings(client):
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="open-counts.example.com")
+    endpoint_id = _insert_endpoint(ingestor_app, target_id, "api.open-counts.example.com")
+
+    with ingestor_app.db_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO findings (endpoint_id, severity, status, title, first_seen, matched_at, dedupe_key)
+            VALUES (?, 'high', 'open', 'fresh open', datetime('now', '-2 hours'), 'https://api.open-counts.example.com/a', 'open-a')
+            """,
+            (endpoint_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO findings (endpoint_id, severity, status, title, first_seen, matched_at, dedupe_key)
+            VALUES (?, 'medium', 'open', 'old open', datetime('now', '-72 hours'), 'https://api.open-counts.example.com/b', 'open-b')
+            """,
+            (endpoint_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO findings (endpoint_id, severity, status, title, first_seen, matched_at, dedupe_key)
+            VALUES (?, 'low', 'fixed', 'fixed finding', datetime('now', '-1 hour'), 'https://api.open-counts.example.com/c', 'fixed-c')
+            """,
+            (endpoint_id,),
+        )
+
+    res = test_client.get("/admin/progress?window_hours=24&target_limit=200&recent_job_limit=60")
+    assert res.status_code == 200
+    body = res.json()
+
+    assert body["overview"]["findings_open_total"] == 2
+    assert body["overview"]["findings_open_window"] == 1
+    target = next(t for t in body["targets"] if t["id"] == target_id)
+    assert target["finding_open_count"] == 2
