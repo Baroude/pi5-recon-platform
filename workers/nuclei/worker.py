@@ -272,6 +272,11 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                 logger.warning("nuclei exited with code %s for %s", proc.returncode, url)
 
     except Exception:
+        try:
+            if proc.poll() is None:
+                proc.kill()
+        except Exception:
+            pass
         with db_conn() as conn:
             conn.execute(
                 "UPDATE jobs SET status = 'failed', finished_at = datetime('now') WHERE id = ?",
