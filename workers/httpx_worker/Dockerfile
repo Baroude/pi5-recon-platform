@@ -4,15 +4,17 @@
 # Binary lives at /usr/local/bin/httpx in the PD image.
 # ---------------------------------------------------------------------------
 # Pin to specific version — update deliberately after testing
-FROM --platform=linux/arm64 projectdiscovery/httpx:v1.6.10 AS httpx-src
-
 FROM --platform=linux/arm64 python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates musl \
+        ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=httpx-src /usr/local/bin/httpx /usr/local/bin/httpx
+RUN curl -fsSL https://github.com/projectdiscovery/httpx/releases/download/v1.6.10/httpx_1.6.10_linux_arm64.zip \
+        -o /tmp/httpx.zip \
+    && unzip -j /tmp/httpx.zip httpx -d /usr/local/bin/ \
+    && chmod +x /usr/local/bin/httpx \
+    && rm /tmp/httpx.zip
 
 WORKDIR /app
 

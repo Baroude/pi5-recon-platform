@@ -3,15 +3,17 @@
 # Templates are bind-mounted at /templates and updated at container start.
 # ---------------------------------------------------------------------------
 # Pin to specific version — update deliberately after testing
-FROM --platform=linux/arm64 projectdiscovery/nuclei:v3.2.9 AS nuclei-src
-
 FROM --platform=linux/arm64 python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates musl \
+        ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=nuclei-src /usr/local/bin/nuclei /usr/local/bin/nuclei
+RUN curl -fsSL https://github.com/projectdiscovery/nuclei/releases/download/v3.2.9/nuclei_3.2.9_linux_arm64.zip \
+        -o /tmp/nuclei.zip \
+    && unzip -j /tmp/nuclei.zip nuclei -d /usr/local/bin/ \
+    && chmod +x /usr/local/bin/nuclei \
+    && rm /tmp/nuclei.zip
 
 WORKDIR /app
 

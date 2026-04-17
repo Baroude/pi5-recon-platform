@@ -4,15 +4,17 @@
 # Multi-stage: copy binaries from official images.
 # ---------------------------------------------------------------------------
 # Pin to specific version — update deliberately after testing
-FROM --platform=linux/arm64 projectdiscovery/subfinder:v2.6.6 AS subfinder-src
-
 FROM --platform=linux/arm64 python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl unzip musl \
+        ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=subfinder-src /usr/local/bin/subfinder /usr/local/bin/subfinder
+RUN curl -fsSL https://github.com/projectdiscovery/subfinder/releases/download/v2.6.6/subfinder_2.6.6_linux_arm64.zip \
+        -o /tmp/subfinder.zip \
+    && unzip -j /tmp/subfinder.zip subfinder -d /usr/local/bin/ \
+    && chmod +x /usr/local/bin/subfinder \
+    && rm /tmp/subfinder.zip
 
 # Download amass ARM64 binary directly from GitHub releases (avoids ghcr.io auth issues)
 RUN curl -fsSL https://github.com/owasp-amass/amass/releases/download/v4.2.0/amass_Linux_arm64.zip \
