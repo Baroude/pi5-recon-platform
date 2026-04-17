@@ -4,7 +4,7 @@
 # Multi-stage: copy binaries from official images.
 # ---------------------------------------------------------------------------
 # Pin to specific version — update deliberately after testing
-FROM --platform=linux/arm64 ghcr.io/projectdiscovery/subfinder:v2.6.6 AS subfinder-src
+FROM --platform=linux/arm64 projectdiscovery/subfinder:v2.6.6 AS subfinder-src
 FROM --platform=linux/arm64 ghcr.io/owasp-amass/amass:latest AS amass-src
 
 FROM --platform=linux/arm64 python:3.12-slim

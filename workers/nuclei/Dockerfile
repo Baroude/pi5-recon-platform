@@ -3,7 +3,7 @@
 # Templates are bind-mounted at /templates and updated at container start.
 # ---------------------------------------------------------------------------
 # Pin to specific version — update deliberately after testing
-FROM --platform=linux/arm64 ghcr.io/projectdiscovery/nuclei:v3.2.9 AS nuclei-src
+FROM --platform=linux/arm64 projectdiscovery/nuclei:v3.2.9 AS nuclei-src
 
 FROM --platform=linux/arm64 python:3.12-slim
 

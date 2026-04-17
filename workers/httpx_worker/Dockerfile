@@ -4,7 +4,7 @@
 # Binary lives at /usr/local/bin/httpx in the PD image.
 # ---------------------------------------------------------------------------
 # Pin to specific version — update deliberately after testing
-FROM --platform=linux/arm64 ghcr.io/projectdiscovery/httpx:v1.6.10 AS httpx-src
+FROM --platform=linux/arm64 projectdiscovery/httpx:v1.6.10 AS httpx-src
 
 FROM --platform=linux/arm64 python:3.12-slim
 
