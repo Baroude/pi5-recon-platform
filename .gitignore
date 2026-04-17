@@ -34,3 +34,6 @@ Thumbs.db
 
 # Claude Code internal state
 .claude/
+
+# Git worktrees
+.worktrees/

@@ -119,14 +119,16 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
 
     with db_conn() as conn:
         row = conn.execute(
-            "SELECT id, scope_root FROM targets WHERE scope_root = ? AND enabled = 1",
+            "SELECT id, scope_root, active_recon, brute_wordlist FROM targets WHERE scope_root = ? AND enabled = 1",
             (domain,),
         ).fetchone()
         if not row:
             raise ValueError(f"Target not found or disabled: {domain}")
 
-        target_id  = row["id"]
-        scope_root = row["scope_root"]
+        target_id    = row["id"]
+        scope_root   = row["scope_root"]
+        active_recon = bool(row["active_recon"])
+        brute_wordlist = row["brute_wordlist"] or "dns-small.txt"
 
         stale_threshold = f"-{RECON_INTERVAL_HOURS}"
         recent = conn.execute(
@@ -254,6 +256,15 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                    WHERE id = ?""",
                 (subfinder_file, job_id),
             )
+
+        if active_recon:
+            enqueue(r, "brute_domain", {
+                "target_id":  target_id,
+                "domain":     domain,
+                "scope_root": scope_root,
+                "wordlist":   brute_wordlist,
+            }, dedup_key=f"brute:{domain}", dedup_ttl_secs=int(RECON_INTERVAL_HOURS * 3600))
+            logger.info("Enqueued brute_domain for %s (wordlist=%s)", domain, brute_wordlist)
 
     except Exception:
         with db_conn() as conn:

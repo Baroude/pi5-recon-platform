@@ -117,6 +117,24 @@ def init_db(path: str = None) -> None:
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists
+
+    # Active recon opt-in flag and wordlist selection per target (idempotent).
+    try:
+        conn.execute(
+            "ALTER TABLE targets ADD COLUMN active_recon BOOLEAN NOT NULL DEFAULT 0"
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        conn.execute(
+            "ALTER TABLE targets ADD COLUMN brute_wordlist TEXT NOT NULL DEFAULT 'dns-small.txt'"
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
     conn.commit()
     conn.close()
     logger.info("DB ready: %s", p)

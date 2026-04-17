@@ -152,6 +152,64 @@ services:
       - /opt/recon-platform/nuclei-templates:/templates
 
   # --------------------------------------------------------------------------
+  # Unbound resolver — internal recursive DNS for brute-force workers.
+  # No public resolvers used; all DNS traffic stays within the Docker network.
+  # --------------------------------------------------------------------------
+  resolver:
+    image: mvance/unbound:1.19.3
+    platform: linux/arm64
+    restart: unless-stopped
+    networks:
+      - recon-net
+    volumes:
+      - ./config/unbound/unbound.conf:/etc/unbound/unbound.conf:ro
+      - /opt/recon-platform/config/unbound/root.hints:/etc/unbound/root.hints:ro
+    healthcheck:
+      test: ["CMD", "unbound-checkconf"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --------------------------------------------------------------------------
+  # DNS brute-force worker — shuffledns + alterx permutation via internal Unbound
+  # Only enqueued when active_recon=true on the target.
+  # --------------------------------------------------------------------------
+  worker-dns-brute:
+    <<: *worker-defaults
+    build:
+      context: .
+      dockerfile: workers/dns_brute/Dockerfile
+      args:
+        CACHE_BUST: ${CACHE_BUST:-1}
+    platform: linux/arm64
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
+      - OUTPUT_DIR=${OUTPUT_DIR:-/data/output}
+      - DNS_BRUTE_THREADS=${DNS_BRUTE_THREADS:-20}
+      - DNS_BRUTE_RETRIES=${DNS_BRUTE_RETRIES:-3}
+      - MAX_PERMUTATION_CANDIDATES=${MAX_PERMUTATION_CANDIDATES:-50000}
+      - DNS_TIMEOUT_SECS=${DNS_TIMEOUT_SECS:-900}
+      - PERM_TIMEOUT_SECS=${PERM_TIMEOUT_SECS:-600}
+    volumes:
+      - /opt/recon-platform/data/db:/data/db
+      - /opt/recon-platform/data/output:/data/output
+      - /opt/recon-platform/logs:/logs
+      - /opt/recon-platform/wordlists:/wordlists:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      resolver:
+        condition: service_healthy
+    mem_limit: 768m
+    cpus: "1.5"
+
+  # --------------------------------------------------------------------------
   # Notify worker — dispatches Telegram / Discord alerts
   # --------------------------------------------------------------------------
   worker-notify:
