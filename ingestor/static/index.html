@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Recon Platform</title>
+<title>Recon Platform Dashboard</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -18,7 +18,6 @@
     --yellow: #d29922;
     --orange: #f0883e;
     --red: #f85149;
-    --purple: #bc8cff;
   }
 
   body {
@@ -41,10 +40,12 @@
     z-index: 10;
   }
 
-  header h1 { font-size: 16px; font-weight: 600; letter-spacing: .5px; }
+  header h1 { font-size: 16px; font-weight: 600; letter-spacing: .3px; }
 
   .status-dot {
-    width: 8px; height: 8px; border-radius: 50%;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
     background: var(--muted);
     flex-shrink: 0;
   }
@@ -53,9 +54,15 @@
 
   .refresh-info { margin-left: auto; color: var(--muted); font-size: 12px; }
 
-  main { max-width: 1400px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 24px; }
+  main {
+    max-width: 1450px;
+    margin: 0 auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
 
-  /* ---- Add target form ---- */
   .add-form {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -67,8 +74,17 @@
     flex-wrap: wrap;
   }
 
-  .add-form label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; flex: 1; min-width: 200px; }
-  .add-form input[type=text], .add-form input[type=url] {
+  .add-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: var(--muted);
+    font-size: 12px;
+    flex: 1;
+    min-width: 200px;
+  }
+
+  .add-form input[type=text] {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -91,7 +107,7 @@
     padding: 8px 16px;
     white-space: nowrap;
   }
-  button:hover { opacity: .85; }
+  button:hover { opacity: .86; }
   button.danger { background: var(--red); }
   button.sm { padding: 4px 10px; font-size: 12px; font-weight: 500; }
 
@@ -99,31 +115,47 @@
   .form-msg.ok { color: var(--green); }
   .form-msg.err { color: var(--red); }
 
-  /* ---- Queue cards ---- */
-  .queues { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+  }
 
-  .queue-card {
+  .kpi-card {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 14px 16px;
+    padding: 12px 14px;
+    min-height: 90px;
   }
-  .queue-card h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 10px; }
-  .queue-metrics { display: flex; gap: 16px; }
-  .metric { display: flex; flex-direction: column; gap: 2px; }
-  .metric .val { font-size: 22px; font-weight: 700; }
-  .metric .lbl { font-size: 11px; color: var(--muted); }
-  .val.warn { color: var(--yellow); }
-  .val.err  { color: var(--red); }
-  .val.ok   { color: var(--green); }
 
-  /* ---- Section ---- */
+  .kpi-title {
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    margin-bottom: 8px;
+  }
+
+  .kpi-value {
+    font-size: 26px;
+    font-weight: 700;
+    line-height: 1.1;
+  }
+
+  .kpi-sub {
+    margin-top: 5px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
   section {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
     overflow: hidden;
   }
+
   section h2 {
     font-size: 13px;
     font-weight: 600;
@@ -133,6 +165,7 @@
     align-items: center;
     gap: 8px;
   }
+
   section h2 .count {
     background: var(--border);
     border-radius: 10px;
@@ -143,9 +176,9 @@
     margin-left: auto;
   }
 
-  /* ---- Table ---- */
   .tbl-wrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
+
   thead th {
     background: var(--bg);
     color: var(--muted);
@@ -157,6 +190,7 @@
     text-transform: uppercase;
     white-space: nowrap;
   }
+
   tbody tr { border-top: 1px solid var(--border); }
   tbody tr:hover { background: #1c2128; }
   td { padding: 8px 12px; vertical-align: middle; }
@@ -175,14 +209,35 @@
   .badge.medium   { background: #3d2f00; color: var(--yellow); }
   .badge.low      { background: #112a18; color: var(--green); }
   .badge.info     { background: #112244; color: var(--accent); }
-  .badge.done     { background: #112a18; color: var(--green); }
-  .badge.failed   { background: #4a1818; color: var(--red); }
-  .badge.running  { background: #112244; color: var(--accent); }
-  .badge.pending  { background: #222; color: var(--muted); }
-  .badge.enabled  { background: #112a18; color: var(--green); }
-  .badge.disabled { background: #222; color: var(--muted); }
 
-  /* ---- DLQ errors ---- */
+  .badge.done,
+  .badge.enabled,
+  .badge.ok { background: #112a18; color: var(--green); }
+
+  .badge.failed,
+  .badge.err,
+  .badge.disabled { background: #4a1818; color: var(--red); }
+
+  .badge.running { background: #112244; color: var(--accent); }
+  .badge.pending { background: #2a2f36; color: var(--muted); }
+
+  .stack {
+    display: flex;
+    width: 160px;
+    height: 7px;
+    border-radius: 99px;
+    overflow: hidden;
+    background: #242b34;
+    margin-top: 4px;
+  }
+  .stack > span { display: block; height: 100%; }
+  .stack .done { background: var(--green); }
+  .stack .running { background: var(--accent); }
+  .stack .failed { background: var(--red); }
+  .stack .pending { background: #4e5968; }
+
+  .muted { color: var(--muted); }
+
   .dlq-list { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
   .dlq-item {
     background: #1c1010;
@@ -197,7 +252,18 @@
   }
   .dlq-empty { padding: 12px 16px; color: var(--muted); font-size: 13px; }
 
-  .empty-row td { color: var(--muted); font-style: italic; text-align: center; padding: 24px; }
+  .empty-row td {
+    color: var(--muted);
+    font-style: italic;
+    text-align: center;
+    padding: 24px;
+  }
+
+  @media (max-width: 900px) {
+    main { padding: 12px; }
+    .kpi-card { min-height: 74px; }
+    .kpi-value { font-size: 22px; }
+  }
 </style>
 </head>
 <body>
@@ -205,12 +271,10 @@
 <header>
   <div class="status-dot" id="health-dot"></div>
   <h1>Recon Platform</h1>
-  <span class="refresh-info" id="refresh-ts">Loading…</span>
+  <span class="refresh-info" id="refresh-ts">Loading...</span>
 </header>
 
 <main>
-
-  <!-- Add target -->
   <div class="add-form">
     <label>
       Add target
@@ -224,10 +288,26 @@
     <span class="form-msg" id="form-msg"></span>
   </div>
 
-  <!-- Queue status -->
-  <div class="queues" id="queues"></div>
+  <div class="kpis" id="kpis"></div>
 
-  <!-- Targets -->
+  <section>
+    <h2>Pipeline Progress <span class="count" id="pipeline-window">24h</span></h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Stage</th>
+          <th>Queue</th>
+          <th>Jobs (Window)</th>
+          <th>Jobs (All Time)</th>
+          <th>Success</th>
+          <th>Last Success</th>
+          <th>Last Failure</th>
+        </tr></thead>
+        <tbody id="pipeline-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
   <section>
     <h2>Targets <span class="count" id="targets-count">0</span></h2>
     <div class="tbl-wrap">
@@ -235,8 +315,12 @@
         <thead><tr>
           <th>Domain</th>
           <th>Status</th>
+          <th>Recon</th>
+          <th>Recon (Window)</th>
           <th>Subdomains</th>
-          <th>Last Recon</th>
+          <th>Live Endpoints</th>
+          <th>Findings</th>
+          <th>Last Activity</th>
           <th>Notes</th>
           <th></th>
         </tr></thead>
@@ -245,13 +329,31 @@
     </div>
   </section>
 
-  <!-- DLQ errors -->
+  <section>
+    <h2>Recent Jobs <span class="count" id="jobs-count">0</span></h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>ID</th>
+          <th>Type</th>
+          <th>Target</th>
+          <th>Status</th>
+          <th>Duration</th>
+          <th>Retries</th>
+          <th>Worker</th>
+          <th>Started</th>
+          <th>Finished</th>
+        </tr></thead>
+        <tbody id="jobs-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
   <section id="dlq-section">
     <h2>Errors (DLQ) <span class="count" id="dlq-count">0</span></h2>
     <div id="dlq-content" class="dlq-empty">No errors.</div>
   </section>
 
-  <!-- Findings -->
   <section>
     <h2>Findings <span class="count" id="findings-count">0</span></h2>
     <div class="tbl-wrap">
@@ -268,7 +370,6 @@
     </div>
   </section>
 
-  <!-- Subdomains -->
   <section>
     <h2>Subdomains <span class="count" id="subdomains-count">0</span></h2>
     <div class="tbl-wrap">
@@ -284,225 +385,419 @@
       </table>
     </div>
   </section>
-
 </main>
 
 <script>
 const BASE = window.location.origin;
 
+const STAGE_LABELS = {
+  recon_domain: "Recon",
+  probe_host: "HTTPX",
+  scan_http: "Nuclei",
+  notify_finding: "Notify",
+};
+
+function parseTs(s) {
+  if (!s) return null;
+  return new Date(s.endsWith("Z") || s.includes("+") ? s : `${s}Z`);
+}
+
 function ts(s) {
-  if (!s) return '—';
-  const d = new Date(s.endsWith('Z') || s.includes('+') ? s : s + 'Z');
-  return d.toLocaleString();
+  const d = parseTs(s);
+  return d ? d.toLocaleString() : "-";
 }
 
 function relTs(s) {
-  if (!s) return '—';
-  const d = new Date(s.endsWith('Z') || s.includes('+') ? s : s + 'Z');
-  const diff = Math.floor((Date.now() - d) / 1000);
-  if (diff < 60)   return `${diff}s ago`;
-  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
-  return `${Math.floor(diff/86400)}d ago`;
+  const d = parseTs(s);
+  if (!d) return "-";
+  const diff = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (diff < 0) return "just now";
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
 }
 
 function esc(s) {
-  if (s == null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  if (s == null) return "";
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
-function numClass(n) {
-  if (n === 0) return 'ok';
-  if (n < 5)   return 'warn';
-  return 'err';
+function escAttr(s) {
+  return esc(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function num(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function statusBadge(status) {
+  const s = (status || "pending").toLowerCase();
+  return `<span class="badge ${esc(s)}">${esc(s)}</span>`;
+}
+
+function fmtPct(n) {
+  if (n == null || Number.isNaN(n)) return "-";
+  return `${Math.round(n)}%`;
+}
+
+function duration(started, finished) {
+  const s = parseTs(started);
+  if (!s) return "-";
+  const e = parseTs(finished) || new Date();
+  const sec = Math.max(0, Math.floor((e.getTime() - s.getTime()) / 1000));
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return `${h}h ${m}m`;
 }
 
 async function apiFetch(path) {
   const r = await fetch(BASE + path);
-  if (!r.ok) throw new Error(r.statusText);
+  if (!r.ok) {
+    let detail = r.statusText;
+    try {
+      const body = await r.json();
+      detail = body.detail ? JSON.stringify(body.detail) : detail;
+    } catch {
+      // no-op
+    }
+    throw new Error(detail || `HTTP ${r.status}`);
+  }
   return r.json();
 }
 
-// ---------- health ----------
 async function refreshHealth() {
-  const dot = document.getElementById('health-dot');
+  const dot = document.getElementById("health-dot");
   try {
-    await apiFetch('/health');
-    dot.className = 'status-dot ok';
+    await apiFetch("/health");
+    dot.className = "status-dot ok";
   } catch {
-    dot.className = 'status-dot err';
+    dot.className = "status-dot err";
   }
 }
 
-// ---------- queues ----------
-const QUEUE_LABELS = {
-  recon_domain: 'Recon',
-  probe_host:   'HTTPX',
-  scan_http:    'Nuclei',
-  notify_finding: 'Notify',
-};
+function renderKpis(progress) {
+  const o = progress.overview || {};
+  const p = progress.pipeline || {};
 
-async function refreshQueues() {
-  const data = await apiFetch('/admin/queues');
-  const el = document.getElementById('queues');
-  el.innerHTML = Object.entries(data).map(([q, v]) => `
-    <div class="queue-card">
-      <h3>${esc(QUEUE_LABELS[q] || q)}</h3>
-      <div class="queue-metrics">
-        <div class="metric">
-          <span class="val ${numClass(v.pending)}">${v.pending}</span>
-          <span class="lbl">Pending</span>
-        </div>
-        <div class="metric">
-          <span class="val">${v.processing}</span>
-          <span class="lbl">Running</span>
-        </div>
-        <div class="metric">
-          <span class="val ${v.dlq > 0 ? 'err' : 'ok'}">${v.dlq}</span>
-          <span class="lbl">Failed</span>
-        </div>
-      </div>
+  let queuePending = 0;
+  let queueProcessing = 0;
+  let queueDlq = 0;
+  Object.values(p).forEach((stage) => {
+    queuePending += num(stage.queue?.pending);
+    queueProcessing += num(stage.queue?.processing);
+    queueDlq += num(stage.queue?.dlq);
+  });
+
+  const cards = [
+    {
+      title: "Targets",
+      value: `${num(o.targets_enabled)}`,
+      sub: `${num(o.targets_total)} total`,
+    },
+    {
+      title: "Subdomains",
+      value: `${num(o.subdomains_total)}`,
+      sub: "Discovered in database",
+    },
+    {
+      title: "Live Endpoints",
+      value: `${num(o.endpoints_live)}`,
+      sub: `${num(o.endpoints_total)} endpoints tracked`,
+    },
+    {
+      title: "Findings",
+      value: `${num(o.findings_total)}`,
+      sub: `+${num(o.findings_window)} in last ${num(progress.window_hours)}h`,
+    },
+    {
+      title: "Running Jobs",
+      value: `${num(o.jobs_running)}`,
+      sub: `${queuePending} pending in queues`,
+    },
+    {
+      title: "Queue Pressure",
+      value: `${queuePending + queueProcessing}`,
+      sub: `${queueDlq} in DLQ`,
+    },
+  ];
+
+  document.getElementById("kpis").innerHTML = cards.map((c) => `
+    <div class="kpi-card">
+      <div class="kpi-title">${esc(c.title)}</div>
+      <div class="kpi-value">${esc(c.value)}</div>
+      <div class="kpi-sub">${esc(c.sub)}</div>
     </div>
-  `).join('');
+  `).join("");
 }
 
-// ---------- targets ----------
-async function refreshTargets() {
-  const rows = await apiFetch('/targets');
-  document.getElementById('targets-count').textContent = rows.length;
-  const tbody = document.getElementById('targets-tbody');
+function stackBar(done, running, failed, pending) {
+  const total = done + running + failed + pending;
+  if (!total) return '<div class="stack"></div>';
+  const wDone = Math.round((done / total) * 100);
+  const wRun = Math.round((running / total) * 100);
+  const wFail = Math.round((failed / total) * 100);
+  const wPend = Math.max(0, 100 - wDone - wRun - wFail);
+  return `
+    <div class="stack" title="done=${done}, running=${running}, failed=${failed}, pending=${pending}">
+      <span class="done" style="width:${wDone}%"></span>
+      <span class="running" style="width:${wRun}%"></span>
+      <span class="failed" style="width:${wFail}%"></span>
+      <span class="pending" style="width:${wPend}%"></span>
+    </div>
+  `;
+}
+
+function renderPipeline(progress) {
+  const windowHours = num(progress.window_hours) || 24;
+  document.getElementById("pipeline-window").textContent = `${windowHours}h`;
+
+  const data = progress.pipeline || {};
+  const keys = ["recon_domain", "probe_host", "scan_http", "notify_finding"];
+  const tbody = document.getElementById("pipeline-tbody");
+
+  const rows = keys.map((key) => {
+    const row = data[key] || {};
+    const q = row.queue || {};
+    const w = row.window || {};
+    const a = row.all_time || {};
+
+    const winDone = num(w.done);
+    const winRunning = num(w.running);
+    const winFailed = num(w.failed);
+    const winPending = num(w.pending) + num(q.pending) + num(q.processing);
+    const allDone = num(a.done);
+    const allRunning = num(a.running);
+    const allFailed = num(a.failed);
+    const allPending = num(a.pending);
+
+    const success = (winDone + winFailed) > 0
+      ? (100 * winDone / (winDone + winFailed))
+      : null;
+
+    return `
+      <tr>
+        <td><strong>${esc(STAGE_LABELS[key] || key)}</strong></td>
+        <td class="mono">P:${num(q.pending)} R:${num(q.processing)} DLQ:${num(q.dlq)}</td>
+        <td>
+          <div class="mono">done ${winDone} / run ${winRunning} / fail ${winFailed}</div>
+          ${stackBar(winDone, winRunning, winFailed, winPending)}
+        </td>
+        <td class="mono">done ${allDone} / run ${allRunning} / fail ${allFailed} / pend ${allPending}</td>
+        <td>${success == null ? '<span class="muted">-</span>' : fmtPct(success)}</td>
+        <td class="muted" title="${esc(ts(row.last_done_at))}">${esc(relTs(row.last_done_at))}</td>
+        <td class="muted" title="${esc(ts(row.last_failed_at))}">${esc(relTs(row.last_failed_at))}</td>
+      </tr>
+    `;
+  });
+
+  tbody.innerHTML = rows.join("");
+}
+
+function renderTargets(progress) {
+  const rows = progress.targets || [];
+  document.getElementById("targets-count").textContent = rows.length;
+  const tbody = document.getElementById("targets-tbody");
+
   if (!rows.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No targets yet. Add one above.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No targets yet. Add one above.</td></tr>';
     return;
   }
-  tbody.innerHTML = rows.map(r => `
+
+  tbody.innerHTML = rows.map((r) => `
     <tr>
       <td class="mono">${esc(r.scope_root)}</td>
-      <td><span class="badge ${r.enabled ? 'enabled' : 'disabled'}">${r.enabled ? 'Active' : 'Disabled'}</span></td>
-      <td>${r.subdomain_count ?? 0}</td>
-      <td>${relTs(r.last_recon)}</td>
-      <td style="color:var(--muted)">${esc(r.notes) || '—'}</td>
-      <td><button class="sm danger" onclick="disableTarget(${r.id}, '${esc(r.scope_root)}')">Remove</button></td>
+      <td>${r.enabled ? '<span class="badge enabled">active</span>' : '<span class="badge disabled">disabled</span>'}</td>
+      <td class="muted" title="${esc(ts(r.last_recon))}">${esc(relTs(r.last_recon))}</td>
+      <td class="mono">${num(r.recon_done_window)}</td>
+      <td class="mono">${num(r.subdomain_count)}</td>
+      <td class="mono">${num(r.live_endpoint_count)}</td>
+      <td class="mono">${num(r.finding_count)}</td>
+      <td class="muted" title="${esc(ts(r.last_activity))}">${esc(relTs(r.last_activity))}</td>
+      <td class="muted">${esc(r.notes) || '-'}</td>
+      <td>${r.enabled ? `<button class="sm danger js-disable" data-id="${num(r.id)}" data-domain="${escAttr(r.scope_root)}">Remove</button>` : ''}</td>
     </tr>
-  `).join('');
+  `).join("");
+
+  document.querySelectorAll(".js-disable").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = Number(btn.dataset.id);
+      const domain = btn.dataset.domain || "";
+      disableTarget(id, domain);
+    });
+  });
 }
 
-// ---------- DLQ ----------
+function renderJobs(progress) {
+  const rows = progress.recent_jobs || [];
+  document.getElementById("jobs-count").textContent = rows.length;
+  const tbody = document.getElementById("jobs-tbody");
+
+  if (!rows.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No jobs yet.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((r) => `
+    <tr>
+      <td class="mono">${num(r.id)}</td>
+      <td class="mono">${esc(r.type)}</td>
+      <td class="mono" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.target_ref) || '-'}</td>
+      <td>${statusBadge(r.status)}</td>
+      <td class="mono">${duration(r.started_at, r.finished_at)}</td>
+      <td class="mono">${num(r.retry_count)}</td>
+      <td class="mono">${esc(r.worker_name) || '-'}</td>
+      <td class="muted" title="${esc(ts(r.started_at))}">${esc(relTs(r.started_at))}</td>
+      <td class="muted" title="${esc(ts(r.finished_at))}">${esc(relTs(r.finished_at))}</td>
+    </tr>
+  `).join("");
+}
+
+async function refreshProgress() {
+  const progress = await apiFetch("/admin/progress?target_limit=200&recent_job_limit=60&window_hours=24");
+  renderKpis(progress);
+  renderPipeline(progress);
+  renderTargets(progress);
+  renderJobs(progress);
+}
+
 async function refreshDlq() {
-  const data = await apiFetch('/admin/dlq');
+  const data = await apiFetch("/admin/dlq");
   let total = 0;
   const items = [];
   for (const [q, v] of Object.entries(data)) {
-    total += v.depth;
-    for (const item of v.recent) {
+    total += num(v.depth);
+    for (const item of (v.recent || [])) {
       items.push({ queue: q, ...item });
     }
   }
-  document.getElementById('dlq-count').textContent = total;
-  const el = document.getElementById('dlq-content');
+
+  document.getElementById("dlq-count").textContent = total;
+  const el = document.getElementById("dlq-content");
+
   if (!items.length) {
-    el.className = 'dlq-empty';
-    el.textContent = 'No errors.';
+    el.className = "dlq-empty";
+    el.textContent = "No errors.";
     return;
   }
-  el.className = 'dlq-list';
-  el.innerHTML = items.map(i => `<div class="dlq-item">[${esc(i.queue)}] ${esc(JSON.stringify(i, null, 2))}</div>`).join('');
+
+  el.className = "dlq-list";
+  el.innerHTML = items.map((i) => `<div class="dlq-item">[${esc(i.queue)}] ${esc(JSON.stringify(i, null, 2))}</div>`).join("");
 }
 
-// ---------- findings ----------
-const SEV_ORDER = ['critical','high','medium','low','info'];
-
 async function refreshFindings() {
-  const rows = await apiFetch('/findings?limit=100');
-  document.getElementById('findings-count').textContent = rows.length;
-  const tbody = document.getElementById('findings-tbody');
+  const rows = await apiFetch("/findings?limit=100");
+  document.getElementById("findings-count").textContent = rows.length;
+  const tbody = document.getElementById("findings-tbody");
+
   if (!rows.length) {
     tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No findings yet.</td></tr>';
     return;
   }
-  tbody.innerHTML = rows.map(r => `
+
+  tbody.innerHTML = rows.map((r) => `
     <tr>
-      <td><span class="badge ${esc(r.severity?.toLowerCase())}">${esc(r.severity)}</span></td>
+      <td><span class="badge ${esc((r.severity || "info").toLowerCase())}">${esc(r.severity || "info")}</span></td>
       <td>${esc(r.title)}</td>
       <td class="mono">${esc(r.host)}</td>
       <td class="mono" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.url)}</td>
-      <td style="color:var(--muted)">${relTs(r.first_seen)}</td>
+      <td class="muted" title="${esc(ts(r.first_seen))}">${esc(relTs(r.first_seen))}</td>
     </tr>
-  `).join('');
+  `).join("");
 }
 
-// ---------- subdomains ----------
 async function refreshSubdomains() {
-  const rows = await apiFetch('/subdomains?limit=200');
-  document.getElementById('subdomains-count').textContent = rows.length;
-  const tbody = document.getElementById('subdomains-tbody');
+  const rows = await apiFetch("/subdomains?limit=200");
+  document.getElementById("subdomains-count").textContent = rows.length;
+  const tbody = document.getElementById("subdomains-tbody");
+
   if (!rows.length) {
     tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No subdomains found yet.</td></tr>';
     return;
   }
-  tbody.innerHTML = rows.map(r => `
+
+  tbody.innerHTML = rows.map((r) => `
     <tr>
       <td class="mono">${esc(r.hostname)}</td>
-      <td class="mono" style="color:var(--muted)">${esc(r.scope_root)}</td>
-      <td style="color:var(--muted)">${esc(r.source)}</td>
-      <td style="color:var(--muted)">${relTs(r.first_seen)}</td>
-      <td style="color:var(--muted)">${relTs(r.last_seen)}</td>
+      <td class="mono muted">${esc(r.scope_root)}</td>
+      <td class="muted">${esc(r.source)}</td>
+      <td class="muted" title="${esc(ts(r.first_seen))}">${esc(relTs(r.first_seen))}</td>
+      <td class="muted" title="${esc(ts(r.last_seen))}">${esc(relTs(r.last_seen))}</td>
     </tr>
-  `).join('');
+  `).join("");
 }
 
-// ---------- actions ----------
 async function addTarget() {
-  const domain = document.getElementById('new-domain').value.trim();
-  const notes  = document.getElementById('new-notes').value.trim();
-  const msg    = document.getElementById('form-msg');
-  if (!domain) { msg.className = 'form-msg err'; msg.textContent = 'Enter a domain.'; return; }
+  const domain = document.getElementById("new-domain").value.trim();
+  const notes = document.getElementById("new-notes").value.trim();
+  const msg = document.getElementById("form-msg");
+
+  if (!domain) {
+    msg.className = "form-msg err";
+    msg.textContent = "Enter a domain.";
+    return;
+  }
 
   try {
     const r = await fetch(`${BASE}/targets`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ scope_root: domain, notes: notes || null }),
     });
+
     const body = await r.json();
     if (!r.ok) {
       const detail = body.detail;
-      const errMsg = Array.isArray(detail) ? detail.map(e => e.msg).join(', ') : (detail || r.statusText);
-      msg.className = 'form-msg err'; msg.textContent = errMsg;
+      const errMsg = Array.isArray(detail)
+        ? detail.map((e) => e.msg).join(", ")
+        : (detail || r.statusText);
+      msg.className = "form-msg err";
+      msg.textContent = errMsg;
       return;
     }
-    msg.className = 'form-msg ok'; msg.textContent = `Queued: ${domain}`;
-    document.getElementById('new-domain').value = '';
-    document.getElementById('new-notes').value = '';
-    setTimeout(() => { msg.textContent = ''; }, 4000);
+
+    msg.className = "form-msg ok";
+    msg.textContent = `Queued: ${domain}`;
+    document.getElementById("new-domain").value = "";
+    document.getElementById("new-notes").value = "";
+    setTimeout(() => { msg.textContent = ""; }, 4000);
     refreshAll();
   } catch (e) {
-    msg.className = 'form-msg err'; msg.textContent = e.message;
+    msg.className = "form-msg err";
+    msg.textContent = e.message;
   }
 }
 
 async function disableTarget(id, domain) {
-  if (!confirm(`Remove target "${domain}"?\n\nThis disables it — existing data is kept.`)) return;
-  await fetch(`${BASE}/targets/${id}`, { method: 'DELETE' });
+  if (!confirm(`Remove target "${domain}"?\n\nThis disables it - existing data is kept.`)) return;
+  await fetch(`${BASE}/targets/${id}`, { method: "DELETE" });
   refreshAll();
 }
 
-document.getElementById('new-domain').addEventListener('keydown', e => {
-  if (e.key === 'Enter') addTarget();
+document.getElementById("new-domain").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") addTarget();
 });
 
-// ---------- main loop ----------
 async function refreshAll() {
-  const now = new Date().toLocaleTimeString();
-  document.getElementById('refresh-ts').textContent = `Last update: ${now}`;
+  const start = new Date();
+  document.getElementById("refresh-ts").textContent = `Updating... ${start.toLocaleTimeString()}`;
+
   await Promise.allSettled([
     refreshHealth(),
-    refreshQueues(),
-    refreshTargets(),
+    refreshProgress(),
     refreshDlq(),
     refreshFindings(),
     refreshSubdomains(),
   ]);
+
+  const end = new Date();
+  document.getElementById("refresh-ts").textContent = `Last update: ${end.toLocaleTimeString()}`;
 }
 
 refreshAll();
@@ -510,3 +805,4 @@ setInterval(refreshAll, 5000);
 </script>
 </body>
 </html>
+

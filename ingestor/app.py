@@ -18,6 +18,7 @@ import re
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import redis as redis_lib
@@ -206,7 +207,7 @@ def queue_status():
     for q in _DLQ_QUEUES:
         result[q] = {
             "pending": r.llen(q),
-            "processing": r.llen(f"processing:{q}"),
+            "processing": r.llen(f"{q}:processing"),
             "dlq": r.llen(f"dlq:{q}"),
         }
     return result
@@ -229,6 +230,180 @@ def dlq_status():
                 parsed.append({"raw": raw})
         result[q] = {"depth": depth, "recent": parsed}
     return result
+
+
+@app.get("/admin/progress")
+def progress_snapshot(
+    target_limit: int = Query(default=100, ge=1, le=500),
+    recent_job_limit: int = Query(default=40, ge=5, le=200),
+    window_hours: int = Query(default=24, ge=1, le=168),
+):
+    """
+    Consolidated operational snapshot for dashboard rendering.
+    Includes queue pressure, job outcomes, recent activity, and per-target metrics.
+    """
+    r = get_r()
+    queues = {}
+    for q in _DLQ_QUEUES:
+        queues[q] = {
+            "pending": r.llen(q),
+            "processing": r.llen(f"{q}:processing"),
+            "dlq": r.llen(f"dlq:{q}"),
+        }
+
+    with db_conn() as conn:
+        overview = dict(
+            conn.execute(
+                """
+                SELECT
+                  (SELECT COUNT(*) FROM targets) AS targets_total,
+                  (SELECT COUNT(*) FROM targets WHERE enabled = 1) AS targets_enabled,
+                  (SELECT COUNT(*) FROM subdomains) AS subdomains_total,
+                  (SELECT COUNT(*) FROM endpoints) AS endpoints_total,
+                  (SELECT COUNT(*) FROM endpoints WHERE alive = 1) AS endpoints_live,
+                  (SELECT COUNT(*) FROM findings) AS findings_total,
+                  (SELECT COUNT(*) FROM findings
+                   WHERE first_seen > datetime('now', :window || ' hours')) AS findings_window,
+                  (SELECT COUNT(*) FROM jobs WHERE status = 'running') AS jobs_running
+                """,
+                {"window": f"-{window_hours}"},
+            ).fetchone()
+        )
+
+        all_time_rows = conn.execute(
+            """
+            SELECT type, status, COUNT(*) AS count
+            FROM jobs
+            WHERE type IN ('recon_domain', 'probe_host', 'scan_http', 'notify_finding')
+            GROUP BY type, status
+            """
+        ).fetchall()
+        window_rows = conn.execute(
+            """
+            SELECT type, status, COUNT(*) AS count
+            FROM jobs
+            WHERE type IN ('recon_domain', 'probe_host', 'scan_http', 'notify_finding')
+              AND created_at > datetime('now', :window || ' hours')
+            GROUP BY type, status
+            """,
+            {"window": f"-{window_hours}"},
+        ).fetchall()
+        timestamp_rows = conn.execute(
+            """
+            SELECT
+              type,
+              MAX(CASE WHEN status = 'done' THEN finished_at END) AS last_done_at,
+              MAX(CASE WHEN status = 'failed' THEN finished_at END) AS last_failed_at
+            FROM jobs
+            WHERE type IN ('recon_domain', 'probe_host', 'scan_http', 'notify_finding')
+            GROUP BY type
+            """
+        ).fetchall()
+        recent_jobs = conn.execute(
+            """
+            SELECT id, type, target_ref, status, created_at, started_at, finished_at,
+                   retry_count, worker_name
+            FROM jobs
+            ORDER BY COALESCE(finished_at, started_at, created_at) DESC, id DESC
+            LIMIT :lim
+            """,
+            {"lim": recent_job_limit},
+        ).fetchall()
+        targets = conn.execute(
+            """
+            SELECT
+              t.id, t.scope_root, t.enabled, t.created_at, t.notes,
+              COALESCE(sd.subdomain_count, 0) AS subdomain_count,
+              COALESCE(ep.live_endpoint_count, 0) AS live_endpoint_count,
+              COALESCE(fd.finding_count, 0) AS finding_count,
+              (
+                SELECT MAX(j.finished_at)
+                FROM jobs j
+                WHERE j.type = 'recon_domain'
+                  AND j.target_ref = t.scope_root
+                  AND j.status = 'done'
+              ) AS last_recon,
+              (
+                SELECT COUNT(*)
+                FROM jobs j
+                WHERE j.type = 'recon_domain'
+                  AND j.target_ref = t.scope_root
+                  AND j.status = 'done'
+                  AND j.finished_at > datetime('now', :window || ' hours')
+              ) AS recon_done_window,
+              NULLIF(
+                MAX(
+                  COALESCE(
+                    (
+                      SELECT MAX(j.finished_at)
+                      FROM jobs j
+                      WHERE j.target_ref = t.scope_root
+                    ),
+                    '1970-01-01 00:00:00'
+                  ),
+                  COALESCE(sd.last_subdomain_seen, '1970-01-01 00:00:00')
+                ),
+                '1970-01-01 00:00:00'
+              ) AS last_activity
+            FROM targets t
+            LEFT JOIN (
+              SELECT target_id, COUNT(*) AS subdomain_count, MAX(last_seen) AS last_subdomain_seen
+              FROM subdomains
+              GROUP BY target_id
+            ) sd ON sd.target_id = t.id
+            LEFT JOIN (
+              SELECT s.target_id, COUNT(*) AS live_endpoint_count
+              FROM endpoints e
+              JOIN subdomains s ON s.id = e.subdomain_id
+              WHERE e.alive = 1
+              GROUP BY s.target_id
+            ) ep ON ep.target_id = t.id
+            LEFT JOIN (
+              SELECT s.target_id, COUNT(*) AS finding_count
+              FROM findings f
+              JOIN endpoints e ON e.id = f.endpoint_id
+              JOIN subdomains s ON s.id = e.subdomain_id
+              GROUP BY s.target_id
+            ) fd ON fd.target_id = t.id
+            ORDER BY t.enabled DESC, last_activity DESC, t.created_at DESC
+            LIMIT :target_limit
+            """,
+            {"window": f"-{window_hours}", "target_limit": target_limit},
+        ).fetchall()
+
+    pipeline = {
+        q: {
+            "queue": queues[q],
+            "all_time": {"pending": 0, "running": 0, "done": 0, "failed": 0},
+            "window": {"pending": 0, "running": 0, "done": 0, "failed": 0},
+            "last_done_at": None,
+            "last_failed_at": None,
+        }
+        for q in _DLQ_QUEUES
+    }
+
+    for row in all_time_rows:
+        q, status, count = row["type"], row["status"], row["count"]
+        if q in pipeline and status in pipeline[q]["all_time"]:
+            pipeline[q]["all_time"][status] = count
+    for row in window_rows:
+        q, status, count = row["type"], row["status"], row["count"]
+        if q in pipeline and status in pipeline[q]["window"]:
+            pipeline[q]["window"][status] = count
+    for row in timestamp_rows:
+        q = row["type"]
+        if q in pipeline:
+            pipeline[q]["last_done_at"] = row["last_done_at"]
+            pipeline[q]["last_failed_at"] = row["last_failed_at"]
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "window_hours": window_hours,
+        "overview": overview,
+        "pipeline": pipeline,
+        "recent_jobs": [dict(r) for r in recent_jobs],
+        "targets": [dict(r) for r in targets],
+    }
 
 
 @app.post("/targets", status_code=201)
