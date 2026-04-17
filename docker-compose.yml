@@ -100,9 +100,11 @@ services:
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
+      - OUTPUT_DIR=${OUTPUT_DIR:-/data/output}
       - DEFAULT_RECON_INTERVAL_HOURS=${DEFAULT_RECON_INTERVAL_HOURS:-24}
     volumes:
       - /opt/recon-platform/data/db:/data/db
+      - /opt/recon-platform/data/output:/data/output:ro
       - /opt/recon-platform/logs:/logs
     ports:
       - "${INGESTOR_PORT:-8090}:8090"
@@ -195,7 +197,7 @@ services:
       - OUTPUT_DIR=${OUTPUT_DIR:-/data/output}
       - NUCLEI_TEMPLATES_DIR=${NUCLEI_TEMPLATES_DIR:-/templates}
       - NUCLEI_TEMPLATES_UPDATE_INTERVAL_HOURS=${NUCLEI_TEMPLATES_UPDATE_INTERVAL_HOURS:-24}
-      - NUCLEI_SEVERITY_MIN=${NUCLEI_SEVERITY_MIN:-medium}
+      - NUCLEI_SEVERITY_MIN=${NUCLEI_SEVERITY_MIN:-high}
       - MAX_NUCLEI_CONCURRENCY=${MAX_NUCLEI_CONCURRENCY:-25}
       - NUCLEI_BATCH_SIZE=${NUCLEI_BATCH_SIZE:-5}
       - DEFAULT_NUCLEI_INTERVAL_HOURS=${DEFAULT_NUCLEI_INTERVAL_HOURS:-24}
@@ -292,7 +294,7 @@ services:
       - TELEGRAM_BOT_TOKEN
       - TELEGRAM_CHAT_ID
       - DISCORD_WEBHOOK_URL
-      - NUCLEI_SEVERITY_MIN=${NUCLEI_SEVERITY_MIN:-medium}
+      - NUCLEI_SEVERITY_MIN=${NUCLEI_SEVERITY_MIN:-high}
     volumes:
       - /opt/recon-platform/data/db:/data/db
       - /opt/recon-platform/logs:/logs
