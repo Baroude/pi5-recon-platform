@@ -50,7 +50,7 @@ UPDATED_ENV=$(echo "${STACK}" | jq -c \
   '.Env | map(select(.name != "CACHE_BUST")) + [{"name":"CACHE_BUST","value":$cb}]')
 
 # Trigger Portainer git redeploy
-curl -sf -X POST \
+curl -sf -X PUT \
   "${PORTAINER_URL}/api/stacks/${STACK_ID}/git/redeploy?endpointId=${ENDPOINT_ID}" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
