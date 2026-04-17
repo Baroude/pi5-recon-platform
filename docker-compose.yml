@@ -197,8 +197,8 @@ services:
       - NUCLEI_TEMPLATES_UPDATE_INTERVAL_HOURS=${NUCLEI_TEMPLATES_UPDATE_INTERVAL_HOURS:-24}
       - NUCLEI_SEVERITY_MIN=${NUCLEI_SEVERITY_MIN:-medium}
       - MAX_NUCLEI_CONCURRENCY=${MAX_NUCLEI_CONCURRENCY:-25}
+      - NUCLEI_BATCH_SIZE=${NUCLEI_BATCH_SIZE:-5}
       - DEFAULT_NUCLEI_INTERVAL_HOURS=${DEFAULT_NUCLEI_INTERVAL_HOURS:-24}
-      - NUCLEI_THROTTLE_SECS=${NUCLEI_THROTTLE_SECS:-5}
       - NUCLEI_PROC_TIMEOUT=${NUCLEI_PROC_TIMEOUT:-900}
       - NUCLEI_RATE_LIMIT=${NUCLEI_RATE_LIMIT:-150}
       - NUCLEI_BULK_SIZE=${NUCLEI_BULK_SIZE:-100}
@@ -209,6 +209,8 @@ services:
       - /opt/recon-platform/data/output:/data/output
       - /opt/recon-platform/logs:/logs
       - /opt/recon-platform/nuclei-templates:/templates
+    deploy:
+      replicas: 4
 
   # --------------------------------------------------------------------------
   # Unbound resolver — internal recursive DNS for brute-force workers.

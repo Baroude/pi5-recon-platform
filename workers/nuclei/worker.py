@@ -8,12 +8,12 @@ Produces: notify_finding payload: {"notification_type": "new_finding",
 
 Workflow
 --------
-1. Dequeue scan_http task.
+1. Dequeue up to NUCLEI_BATCH_SIZE scan_http tasks at once.
 2. TTL check — skip recently scanned URLs.
-3. Run nuclei with curated severity filter and templates dir.
-4. Stream JSONL output line-by-line; deduplicate and persist each finding
-   immediately so notify_finding is enqueued as soon as nuclei fires.
-5. Ack task.
+3. Run nuclei with -list (batch of URLs) and curated severity filter.
+4. Stream JSONL output line-by-line; map findings back to endpoint_id via
+   matched-at URL; deduplicate and persist immediately.
+5. Ack all tasks in the batch.
 
 A background thread re-runs `nuclei -update-templates` on the configured
 interval so templates stay current without a container restart.
@@ -26,6 +26,7 @@ import os
 import select
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime
@@ -56,10 +57,10 @@ MAX_RETRIES           = int(os.environ.get("MAX_RETRIES", 2))
 NUCLEI_INTERVAL_HOURS = float(os.environ.get("DEFAULT_NUCLEI_INTERVAL_HOURS", 24))
 TEMPLATES_DIR         = os.environ.get("NUCLEI_TEMPLATES_DIR", "/templates")
 SEVERITY_MIN          = os.environ.get("NUCLEI_SEVERITY_MIN", "medium")
-MAX_CONCURRENCY       = int(os.environ.get("MAX_NUCLEI_CONCURRENCY", 1))
+MAX_CONCURRENCY       = int(os.environ.get("MAX_NUCLEI_CONCURRENCY", 25))
+NUCLEI_BATCH_SIZE     = int(os.environ.get("NUCLEI_BATCH_SIZE", 1))
 OUTPUT_DIR            = os.environ.get("OUTPUT_DIR", "/data/output")
 TEMPLATE_UPDATE_HOURS = float(os.environ.get("NUCLEI_TEMPLATES_UPDATE_INTERVAL_HOURS", 24))
-NUCLEI_THROTTLE_SECS  = int(os.environ.get("NUCLEI_THROTTLE_SECS", 30))
 NUCLEI_PROC_TIMEOUT   = int(os.environ.get("NUCLEI_PROC_TIMEOUT", 1800))
 NUCLEI_RATE_LIMIT     = int(os.environ.get("NUCLEI_RATE_LIMIT", 10))
 NUCLEI_BULK_SIZE      = int(os.environ.get("NUCLEI_BULK_SIZE", 25))
@@ -128,64 +129,88 @@ def _process_finding(r: redis_lib.Redis, finding: dict, endpoint_id: int, output
         logger.info("Finding enqueued for notify: [%s] %s", severity.upper(), title)
 
 
-def process_task(r: redis_lib.Redis, task: dict) -> None:
-    url         = task.get("url")
-    endpoint_id = task.get("endpoint_id")
-    if not url or not endpoint_id:
-        raise ValueError(f"Missing url or endpoint_id: {task}")
+def _find_endpoint_id(url_to_endpoint: dict, matched_at: str) -> int:
+    """Map a nuclei matched-at URL back to the endpoint_id from the batch."""
+    if matched_at in url_to_endpoint:
+        return url_to_endpoint[matched_at]
+    # matched-at may include a path; try base URL prefix match
+    for base_url, endpoint_id in url_to_endpoint.items():
+        if matched_at.startswith(base_url):
+            return endpoint_id
+    # fall back to hostname match
+    matched_host = urlparse(matched_at).hostname or ""
+    for base_url, endpoint_id in url_to_endpoint.items():
+        if urlparse(base_url).hostname == matched_host:
+            return endpoint_id
+    return next(iter(url_to_endpoint.values()))
 
-    cleanup_old_outputs(OUTPUT_DIR, "nuclei_*.jsonl")
-    logger.info("Scanning %s", url)
 
-    with db_conn() as conn:
-        scope_row = conn.execute(
-            """SELECT t.scope_root
-               FROM endpoints e
-               JOIN subdomains s ON s.id = e.subdomain_id
-               JOIN targets   t ON t.id = s.target_id
-               WHERE e.id = ?""",
-            (endpoint_id,),
-        ).fetchone()
+def process_batch(r: redis_lib.Redis, tasks: list) -> None:
+    if not tasks:
+        return
 
-    scope_root = scope_row["scope_root"] if scope_row else ""
+    # --- resolve scope and TTL-filter each task ---
+    valid = []
+    for task in tasks:
+        url         = task.get("url")
+        endpoint_id = task.get("endpoint_id")
+        if not url or not endpoint_id:
+            logger.warning("Skipping malformed task: %s", task)
+            continue
 
-    if scope_root:
-        parsed_host = urlparse(url).hostname or ""
-        if not is_in_scope(parsed_host, scope_root):
-            logger.warning(
-                "nuclei: out-of-scope endpoint skipped — host=%s scope=%s",
-                parsed_host, scope_root,
-            )
-            return
+        with db_conn() as conn:
+            scope_row = conn.execute(
+                """SELECT t.scope_root FROM endpoints e
+                   JOIN subdomains s ON s.id = e.subdomain_id
+                   JOIN targets   t ON t.id = s.target_id
+                   WHERE e.id = ?""",
+                (endpoint_id,),
+            ).fetchone()
+        scope_root = scope_row["scope_root"] if scope_row else ""
 
-    if scope_root and NUCLEI_THROTTLE_SECS > 0:
-        throttle_key = f"throttle:nuclei:{scope_root}"
-        ttl = r.ttl(throttle_key)
-        if ttl > 0:
-            logger.info(
-                "nuclei throttle: waiting %ds before scanning %s (scope=%s)",
-                ttl, url, scope_root,
-            )
-            time.sleep(ttl)
+        if scope_root:
+            parsed_host = urlparse(url).hostname or ""
+            if not is_in_scope(parsed_host, scope_root):
+                logger.warning("Out-of-scope skipped: %s (scope=%s)", url, scope_root)
+                continue
 
-    with db_conn() as conn:
-        recent = conn.execute(
-            "SELECT last_scanned_at FROM endpoints WHERE id = ? AND last_scanned_at > datetime('now', ? || ' hours')",
-            (endpoint_id, f"-{NUCLEI_INTERVAL_HOURS}"),
-        ).fetchone()
+        with db_conn() as conn:
+            recent = conn.execute(
+                "SELECT last_scanned_at FROM endpoints WHERE id = ? AND last_scanned_at > datetime('now', ? || ' hours')",
+                (endpoint_id, f"-{NUCLEI_INTERVAL_HOURS}"),
+            ).fetchone()
         if recent:
             logger.info("Skipping %s — scanned recently", url)
-            return
+            continue
 
-    with db_conn() as conn:
-        job_id = conn.execute(
-            """INSERT INTO jobs (type, target_ref, status, started_at, worker_name)
-               VALUES ('scan_http', ?, 'running', datetime('now'), ?)""",
-            (url, WORKER_NAME),
-        ).lastrowid
+        valid.append({**task, "scope_root": scope_root})
 
-    host = urlparse(url).hostname or url.split("//")[-1].split("/")[0]
-    out_dir = os.path.join(OUTPUT_DIR, "nuclei", host)
+    if not valid:
+        return
+
+    cleanup_old_outputs(OUTPUT_DIR, "nuclei_*.jsonl")
+
+    urls = [t["url"] for t in valid]
+    url_to_endpoint = {t["url"]: t["endpoint_id"] for t in valid}
+    scope_roots = {t["scope_root"] for t in valid if t["scope_root"]}
+    logger.info("Scanning batch of %d URL(s): %s", len(urls), ", ".join(urls))
+
+    # one job record per URL for dashboard visibility
+    job_ids = {}
+    for t in valid:
+        with db_conn() as conn:
+            job_ids[t["url"]] = conn.execute(
+                """INSERT INTO jobs (type, target_ref, status, started_at, worker_name)
+                   VALUES ('scan_http', ?, 'running', datetime('now'), ?)""",
+                (t["url"], WORKER_NAME),
+            ).lastrowid
+
+    # write URL list to temp file
+    url_list = tempfile.NamedTemporaryFile("w", suffix="_urls.txt", delete=False)
+    url_list.writelines(u + "\n" for u in urls)
+    url_list.close()
+
+    out_dir = os.path.join(OUTPUT_DIR, "nuclei", "_batch")
     os.makedirs(out_dir, exist_ok=True)
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
     output_file = os.path.join(out_dir, f"nuclei_{ts}.jsonl")
@@ -196,7 +221,7 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
 
     cmd = [
         "nuclei",
-        "-u", url,
+        "-list", url_list.name,
         "-t", TEMPLATES_DIR,
         "-severity", severity_arg,
         "-jsonl",
@@ -210,23 +235,22 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
     ]
 
     findings_count = 0
+    proc = None
+    timed_out = False
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
         started_monotonic = time.monotonic()
-        timed_out = False
 
         with open(output_file, "w") as fh:
             while True:
                 if proc.stdout is None:
                     break
-
-                elapsed = time.monotonic() - started_monotonic
-                if elapsed > NUCLEI_PROC_TIMEOUT:
+                if time.monotonic() - started_monotonic > NUCLEI_PROC_TIMEOUT:
                     timed_out = True
                     proc.kill()
-                    logger.error("nuclei process timeout exceeded for %s - killed", url)
+                    logger.error("nuclei batch timeout exceeded — killed")
                     break
 
                 ready, _, _ = select.select([proc.stdout], [], [], 1.0)
@@ -248,8 +272,11 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                 try:
                     finding = json.loads(line)
                 except json.JSONDecodeError:
-                    logger.debug("Non-JSON stdout line from nuclei: %s", line[:120])
+                    logger.debug("Non-JSON nuclei output: %s", line[:120])
                     continue
+
+                matched_at  = finding.get("matched-at", "")
+                endpoint_id = _find_endpoint_id(url_to_endpoint, matched_at)
                 _process_finding(r, finding, endpoint_id, output_file)
                 findings_count += 1
 
@@ -262,54 +289,48 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
         if not timed_out and proc.returncode not in (0, None):
             stderr_tail = (proc.stderr.read() if proc.stderr else "").strip()
             if stderr_tail:
-                logger.warning(
-                    "nuclei exited with code %s for %s: %s",
-                    proc.returncode,
-                    url,
-                    stderr_tail[-500:],
-                )
-            else:
-                logger.warning("nuclei exited with code %s for %s", proc.returncode, url)
+                logger.warning("nuclei exited %s: %s", proc.returncode, stderr_tail[-500:])
 
     except Exception:
-        try:
-            if proc.poll() is None:
-                proc.kill()
-        except Exception:
-            pass
+        if proc and proc.poll() is None:
+            proc.kill()
         with db_conn() as conn:
-            conn.execute(
-                "UPDATE jobs SET status = 'failed', finished_at = datetime('now') WHERE id = ?",
-                (job_id,),
-            )
+            for job_id in job_ids.values():
+                conn.execute(
+                    "UPDATE jobs SET status = 'failed', finished_at = datetime('now') WHERE id = ?",
+                    (job_id,),
+                )
         raise
+    finally:
+        try:
+            os.unlink(url_list.name)
+        except OSError:
+            pass
 
-    logger.info("nuclei: %d finding(s) for %s", findings_count, url)
+    logger.info("nuclei batch: %d finding(s) across %d URL(s)", findings_count, len(urls))
 
     with db_conn() as conn:
-        conn.execute(
-            "UPDATE endpoints SET last_scanned_at = datetime('now') WHERE id = ?",
-            (endpoint_id,),
-        )
-        conn.execute(
-            """UPDATE jobs SET status = 'done', finished_at = datetime('now'),
-               raw_output_path = ? WHERE id = ?""",
-            (output_file, job_id),
-        )
-
-    if scope_root and NUCLEI_THROTTLE_SECS > 0:
-        r.set(f"throttle:nuclei:{scope_root}", "1", ex=NUCLEI_THROTTLE_SECS)
-
-    logger.info("Scan complete for %s", url)
+        for t in valid:
+            conn.execute(
+                "UPDATE endpoints SET last_scanned_at = datetime('now') WHERE id = ?",
+                (t["endpoint_id"],),
+            )
+        for url, job_id in job_ids.items():
+            conn.execute(
+                """UPDATE jobs SET status = 'done', finished_at = datetime('now'),
+                   raw_output_path = ? WHERE id = ?""",
+                (output_file, job_id),
+            )
 
 
-def record_failed_job(task: dict, reason: str) -> None:
+def record_failed_job(tasks: list, reason: str) -> None:
     with db_conn() as conn:
-        conn.execute(
-            """INSERT INTO failed_jobs (type, target_ref, payload, failure_reason, retry_count)
-               VALUES ('scan_http', ?, ?, ?, ?)""",
-            (task.get("url"), json.dumps(task), reason, task.get("retry_count", 0)),
-        )
+        for task in tasks:
+            conn.execute(
+                """INSERT INTO failed_jobs (type, target_ref, payload, failure_reason, retry_count)
+                   VALUES ('scan_http', ?, ?, ?, ?)""",
+                (task.get("url"), json.dumps(task), reason, task.get("retry_count", 0)),
+            )
 
 
 def _template_updater_loop():
@@ -343,22 +364,37 @@ def main():
     t = threading.Thread(target=_template_updater_loop, daemon=True)
     t.start()
 
-    logger.info("Listening on queue: %s", QUEUE)
+    logger.info("Listening on queue: %s (batch_size=%d)", QUEUE, NUCLEI_BATCH_SIZE)
 
     while True:
         try:
-            task = dequeue_blocking(r, QUEUE, PROCESSING, timeout=30)
-            if task is None:
+            first = dequeue_blocking(r, QUEUE, PROCESSING, timeout=30)
+            if first is None:
                 continue
 
+            tasks = [first]
+            while len(tasks) < NUCLEI_BATCH_SIZE:
+                raw = r.lmove(QUEUE, PROCESSING, "LEFT", "RIGHT")
+                if raw is None:
+                    break
+                task = json.loads(raw)
+                task["__raw__"] = raw
+                tasks.append(task)
+
             try:
-                process_task(r, task)
-                ack_task(r, PROCESSING, task)
+                process_batch(r, tasks)
+                for task in tasks:
+                    ack_task(r, PROCESSING, task)
             except Exception as exc:
-                logger.error("Task failed: %s — %s", task.get("url"), exc, exc_info=True)
-                re_enqueued = nack_task(r, QUEUE, PROCESSING, task, MAX_RETRIES)
-                if not re_enqueued:
-                    record_failed_job(task, str(exc))
+                urls = [t.get("url") for t in tasks]
+                logger.error("Batch failed %s — %s", urls, exc, exc_info=True)
+                failed = []
+                for task in tasks:
+                    re_enqueued = nack_task(r, QUEUE, PROCESSING, task, MAX_RETRIES)
+                    if not re_enqueued:
+                        failed.append(task)
+                if failed:
+                    record_failed_job(failed, str(exc))
 
         except redis_lib.ConnectionError as exc:
             logger.error("Redis connection lost: %s", exc)
