@@ -59,6 +59,8 @@ services:
     build:
       context: .
       dockerfile: ingestor/Dockerfile
+      args:
+        CACHE_BUST: ${CACHE_BUST:-1}
     platform: linux/arm64
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
@@ -78,6 +80,8 @@ services:
     build:
       context: .
       dockerfile: workers/recon/Dockerfile
+      args:
+        CACHE_BUST: ${CACHE_BUST:-1}
     platform: linux/arm64
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
@@ -105,6 +109,8 @@ services:
     build:
       context: .
       dockerfile: workers/httpx_worker/Dockerfile
+      args:
+        CACHE_BUST: ${CACHE_BUST:-1}
     platform: linux/arm64
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
@@ -126,6 +132,8 @@ services:
     build:
       context: .
       dockerfile: workers/nuclei/Dockerfile
+      args:
+        CACHE_BUST: ${CACHE_BUST:-1}
     platform: linux/arm64
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
@@ -151,6 +159,8 @@ services:
     build:
       context: .
       dockerfile: workers/notify/Dockerfile
+      args:
+        CACHE_BUST: ${CACHE_BUST:-1}
     platform: linux/arm64
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
