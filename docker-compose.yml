@@ -59,7 +59,6 @@ services:
     build:
       context: .
       dockerfile: ingestor/Dockerfile
-    image: recon-platform/ingestor:latest
     platform: linux/arm64
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
@@ -79,7 +78,6 @@ services:
     build:
       context: .
       dockerfile: workers/recon/Dockerfile
-    image: recon-platform/worker-recon:latest
     platform: linux/arm64
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
@@ -107,7 +105,6 @@ services:
     build:
       context: .
       dockerfile: workers/httpx_worker/Dockerfile
-    image: recon-platform/worker-httpx:latest
     platform: linux/arm64
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
@@ -129,7 +126,6 @@ services:
     build:
       context: .
       dockerfile: workers/nuclei/Dockerfile
-    image: recon-platform/worker-nuclei:latest
     platform: linux/arm64
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
@@ -155,7 +151,6 @@ services:
     build:
       context: .
       dockerfile: workers/notify/Dockerfile
-    image: recon-platform/worker-notify:latest
     platform: linux/arm64
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
