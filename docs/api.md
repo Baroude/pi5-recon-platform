@@ -135,6 +135,7 @@ Includes:
   - `last_job_finished_at`
 - `pipeline` per-stage queue + status totals plus:
   - `done_per_hour_window`
+  - stages: `recon_domain`, `brute_domain`, `probe_host`, `scan_http`, `notify_finding`
 - `targets` with config + scheduling fields:
   - `active_recon`
   - `brute_wordlist`
@@ -150,6 +151,14 @@ Live queue depths for each pipeline stage:
 - pending (`<queue>`)
 - processing (`<queue>:processing`)
 - dead letter (`dlq:<queue>`)
+
+Current stages:
+
+- `recon_domain`
+- `brute_domain`
+- `probe_host`
+- `scan_http`
+- `notify_finding`
 
 ### GET `/admin/dlq`
 

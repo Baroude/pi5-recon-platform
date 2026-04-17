@@ -55,6 +55,11 @@ fi
 # ---------------------------------------------------------------------------
 HINTS="$BASE/config/unbound/root.hints"
 mkdir -p "$BASE/config/unbound"
+# If compose was started before init-dirs, Docker may have created this as a directory.
+if [ -d "$HINTS" ]; then
+    echo "Fixing invalid root.hints directory at $HINTS ..."
+    rm -rf "$HINTS"
+fi
 if [ ! -f "$HINTS" ] || find "$HINTS" -mtime +30 -print | grep -q .; then
     echo "Refreshing root.hints from internic.net..."
     curl -sL https://www.internic.net/domain/named.cache -o "$HINTS"

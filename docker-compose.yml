@@ -156,14 +156,15 @@ services:
   # No public resolvers used; all DNS traffic stays within the Docker network.
   # --------------------------------------------------------------------------
   resolver:
-    image: mvance/unbound:1.19.3
+    image: klutchell/unbound:1.19.3
     platform: linux/arm64
     restart: unless-stopped
+    command: ["-d", "-c", "/etc/unbound/unbound.conf"]
     networks:
       - recon-net
     volumes:
       - ./config/unbound/unbound.conf:/etc/unbound/unbound.conf:ro
-      - /opt/recon-platform/config/unbound/root.hints:/etc/unbound/root.hints:ro
+      - /opt/recon-platform/config/unbound/root.hints:/etc/unbound/named.cache:ro
     healthcheck:
       test: ["CMD", "unbound-checkconf"]
       interval: 10s
