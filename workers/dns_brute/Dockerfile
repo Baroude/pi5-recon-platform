@@ -4,8 +4,13 @@
 FROM --platform=linux/arm64 python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl unzip \
+        ca-certificates curl unzip git make gcc libc6-dev libc-ares-dev \
     && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 https://github.com/blechschmidt/massdns.git /tmp/massdns \
+    && make -C /tmp/massdns \
+    && install -m 0755 /tmp/massdns/bin/massdns /usr/local/bin/massdns \
+    && rm -rf /tmp/massdns
 
 RUN curl -fsSL https://github.com/projectdiscovery/dnsx/releases/download/v1.2.1/dnsx_1.2.1_linux_arm64.zip \
         -o /tmp/dnsx.zip \

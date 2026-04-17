@@ -19,13 +19,14 @@ import json
 import logging
 import os
 import random
+import shutil
 import socket
 import string
 import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import redis as redis_lib
 
@@ -109,8 +110,14 @@ def _detect_wildcard(domain: str) -> bool:
 
 def _run_shuffledns(domain: str, wordlist_path: str, out_file: str) -> list:
     """Run shuffledns brute-force; return list of discovered hostnames."""
+    if shutil.which("massdns") is None:
+        raise FileNotFoundError("massdns binary not found (required by shuffledns)")
+    if shutil.which("shuffledns") is None:
+        raise FileNotFoundError("shuffledns binary not found")
+
     cmd = [
         "shuffledns",
+        "-mode", "bruteforce",
         "-d", domain,
         "-w", wordlist_path,
         "-r", _resolver_file,
@@ -120,13 +127,24 @@ def _run_shuffledns(domain: str, wordlist_path: str, out_file: str) -> list:
         "-o", out_file,
     ]
     try:
-        subprocess.run(cmd, timeout=DNS_TIMEOUT_SECS, check=False,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        logger.warning("shuffledns timed out for %s", domain)
-    except FileNotFoundError:
-        logger.error("shuffledns binary not found")
-        return []
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=DNS_TIMEOUT_SECS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stderr_tail = (exc.stderr or "").strip()
+        detail = f" (stderr: {stderr_tail[-300:]})" if stderr_tail else ""
+        raise RuntimeError(f"shuffledns timed out for {domain}{detail}")
+
+    if proc.returncode != 0:
+        stderr_tail = (proc.stderr or proc.stdout or "").strip()
+        detail = f" (stderr: {stderr_tail[-500:]})" if stderr_tail else ""
+        raise RuntimeError(
+            f"shuffledns failed for {domain} with exit code {proc.returncode}{detail}"
+        )
 
     results = []
     if os.path.exists(out_file):
@@ -224,7 +242,7 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                 )
             return
 
-        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         out_dir = os.path.join(OUTPUT_DIR, "recon", domain)
         os.makedirs(out_dir, exist_ok=True)
         brute_file = os.path.join(out_dir, f"brute_{domain}_{ts}.txt")
@@ -324,8 +342,15 @@ def main():
     global _resolver_file
     logger.info("DNS brute-force worker starting")
 
-    for tool in ("dnsx", "shuffledns", "alterx"):
+    for tool in ("dnsx", "shuffledns", "alterx", "massdns"):
         try:
+            if tool == "massdns":
+                path = shutil.which("massdns")
+                if path:
+                    logger.info("massdns: %s", path)
+                else:
+                    logger.warning("massdns binary not found")
+                continue
             v = subprocess.run([tool, "-version"], capture_output=True, text=True, timeout=10)
             logger.info("%s: %s", tool, (v.stdout.strip() or v.stderr.strip())[:80])
         except FileNotFoundError:
