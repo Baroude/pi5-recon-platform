@@ -71,7 +71,30 @@ _refresh_thread: Optional[threading.Thread] = None
 _DLQ_QUEUES = ["recon_domain", "brute_domain", "probe_host", "scan_http", "notify_finding"]
 
 _ALLOWED_WORDLISTS = {"dns-small.txt", "dns-medium.txt", "dns-large.txt"}
+_DEFAULT_ALLOWED_NUCLEI_TEMPLATES = {
+    "all",
+    "http",
+    "network",
+    "dns",
+    "ssl",
+}
 _STATIC_DIR = "/app/static" if os.path.isdir("/app/static") else os.path.join(os.path.dirname(__file__), "static")
+
+
+def _parse_allowed_nuclei_templates() -> set[str]:
+    raw = os.environ.get("ALLOWED_NUCLEI_TEMPLATES", "")
+    parsed = set()
+    for item in raw.split(","):
+        cleaned = item.strip().strip("/")
+        if cleaned:
+            parsed.add(cleaned)
+    if not parsed:
+        return set(_DEFAULT_ALLOWED_NUCLEI_TEMPLATES)
+    parsed.add("all")
+    return parsed
+
+
+_ALLOWED_NUCLEI_TEMPLATES = _parse_allowed_nuclei_templates()
 
 
 def get_r() -> redis_lib.Redis:
@@ -185,6 +208,7 @@ class TargetIn(BaseModel):
     notes: Optional[str] = None
     active_recon: bool = False
     brute_wordlist: str = "dns-small.txt"
+    nuclei_template: str = "all"
 
     @field_validator("scope_root")
     @classmethod
@@ -206,16 +230,31 @@ class TargetIn(BaseModel):
             raise ValueError(f"brute_wordlist must be one of: {sorted(_ALLOWED_WORDLISTS)}")
         return v
 
+    @field_validator("nuclei_template")
+    @classmethod
+    def validate_nuclei_template(cls, v: str) -> str:
+        if v not in _ALLOWED_NUCLEI_TEMPLATES:
+            raise ValueError(f"nuclei_template must be one of: {sorted(_ALLOWED_NUCLEI_TEMPLATES)}")
+        return v
+
 
 class TargetUpdate(BaseModel):
     active_recon: Optional[bool] = None
     brute_wordlist: Optional[str] = None
+    nuclei_template: Optional[str] = None
 
     @field_validator("brute_wordlist")
     @classmethod
     def validate_wordlist(cls, v: Optional[str]) -> Optional[str]:
         if v is not None and v not in _ALLOWED_WORDLISTS:
             raise ValueError(f"brute_wordlist must be one of: {sorted(_ALLOWED_WORDLISTS)}")
+        return v
+
+    @field_validator("nuclei_template")
+    @classmethod
+    def validate_nuclei_template(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in _ALLOWED_NUCLEI_TEMPLATES:
+            raise ValueError(f"nuclei_template must be one of: {sorted(_ALLOWED_NUCLEI_TEMPLATES)}")
         return v
 
 
@@ -282,6 +321,7 @@ def dlq_status():
 def admin_meta():
     return {
         "allowed_wordlists": sorted(_ALLOWED_WORDLISTS),
+        "allowed_nuclei_templates": sorted(_ALLOWED_NUCLEI_TEMPLATES),
         "recon_interval_hours": RECON_INTERVAL_HOURS,
         "defaults": {
             "window_hours": DEFAULT_WINDOW_HOURS,
@@ -398,7 +438,7 @@ def progress_snapshot(
             WITH target_enriched AS (
               SELECT
                 t.id, t.scope_root, t.enabled, t.created_at, t.notes,
-                t.active_recon, t.brute_wordlist,
+                t.active_recon, t.brute_wordlist, t.nuclei_template,
                 COALESCE(sd.subdomain_count, 0) AS subdomain_count,
                 COALESCE(ep.live_endpoint_count, 0) AS live_endpoint_count,
                 COALESCE(fd.finding_count, 0) AS finding_count,
@@ -523,8 +563,8 @@ def add_target(body: TargetIn):
         if existing:
             if not existing["enabled"]:
                 conn.execute(
-                    "UPDATE targets SET enabled = 1, notes = ?, active_recon = ?, brute_wordlist = ? WHERE id = ?",
-                    (body.notes, body.active_recon, body.brute_wordlist, existing["id"]),
+                    "UPDATE targets SET enabled = 1, notes = ?, active_recon = ?, brute_wordlist = ?, nuclei_template = ? WHERE id = ?",
+                    (body.notes, body.active_recon, body.brute_wordlist, body.nuclei_template, existing["id"]),
                 )
                 target_id = existing["id"]
                 logger.info("Re-enabled target %s", body.scope_root)
@@ -532,14 +572,15 @@ def add_target(body: TargetIn):
                 raise HTTPException(status_code=409, detail="Target already exists")
         else:
             target_id = conn.execute(
-                "INSERT INTO targets (scope_root, notes, active_recon, brute_wordlist) VALUES (?, ?, ?, ?)",
-                (body.scope_root, body.notes, body.active_recon, body.brute_wordlist),
+                "INSERT INTO targets (scope_root, notes, active_recon, brute_wordlist, nuclei_template) VALUES (?, ?, ?, ?, ?)",
+                (body.scope_root, body.notes, body.active_recon, body.brute_wordlist, body.nuclei_template),
             ).lastrowid
             logger.info("Added target %s (id=%d)", body.scope_root, target_id)
 
     enqueue(get_r(), "recon_domain", {"domain": body.scope_root})
     return {"id": target_id, "scope_root": body.scope_root, "queued": True,
-            "active_recon": body.active_recon, "brute_wordlist": body.brute_wordlist}
+            "active_recon": body.active_recon, "brute_wordlist": body.brute_wordlist,
+            "nuclei_template": body.nuclei_template}
 
 
 @app.get("/targets")
@@ -548,7 +589,7 @@ def list_targets():
         rows = conn.execute(
             """
             SELECT t.id, t.scope_root, t.created_at, t.enabled, t.notes,
-                   t.active_recon, t.brute_wordlist,
+                   t.active_recon, t.brute_wordlist, t.nuclei_template,
                    (SELECT COUNT(*) FROM subdomains s WHERE s.target_id = t.id) AS subdomain_count,
                    (SELECT MAX(j.finished_at) FROM jobs j
                     WHERE j.target_ref = t.scope_root AND j.status = 'done') AS last_recon
@@ -571,6 +612,8 @@ def update_target(target_id: int, body: TargetUpdate):
             updates["active_recon"] = body.active_recon
         if body.brute_wordlist is not None:
             updates["brute_wordlist"] = body.brute_wordlist
+        if body.nuclei_template is not None:
+            updates["nuclei_template"] = body.nuclei_template
 
         if not updates:
             raise HTTPException(status_code=422, detail="No fields to update")
@@ -581,7 +624,7 @@ def update_target(target_id: int, body: TargetUpdate):
         logger.info("Updated target %d: %s", target_id, updates)
 
         updated = conn.execute(
-            "SELECT id, scope_root, active_recon, brute_wordlist, enabled FROM targets WHERE id = ?",
+            "SELECT id, scope_root, active_recon, brute_wordlist, nuclei_template, enabled FROM targets WHERE id = ?",
             (target_id,),
         ).fetchone()
     return dict(updated)

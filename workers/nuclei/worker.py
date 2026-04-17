@@ -145,59 +145,33 @@ def _find_endpoint_id(url_to_endpoint: dict, matched_at: str) -> int:
     return next(iter(url_to_endpoint.values()))
 
 
-def process_batch(r: redis_lib.Redis, tasks: list) -> None:
-    if not tasks:
-        return
+def _resolve_template_path(template_name: str) -> str:
+    selected = (template_name or "all").strip().strip("/")
+    if not selected or selected == "all":
+        return TEMPLATES_DIR
+    if ".." in selected.split("/"):
+        logger.warning("Unsafe template path requested (%s) - using all templates", selected)
+        return TEMPLATES_DIR
+    candidate = os.path.join(TEMPLATES_DIR, selected)
+    if not os.path.exists(candidate):
+        logger.warning("Template path not found (%s) - using all templates", candidate)
+        return TEMPLATES_DIR
+    return candidate
 
-    # --- resolve scope and TTL-filter each task ---
-    valid = []
-    for task in tasks:
-        url         = task.get("url")
-        endpoint_id = task.get("endpoint_id")
-        if not url or not endpoint_id:
-            logger.warning("Skipping malformed task: %s", task)
-            continue
 
-        with db_conn() as conn:
-            scope_row = conn.execute(
-                """SELECT t.scope_root FROM endpoints e
-                   JOIN subdomains s ON s.id = e.subdomain_id
-                   JOIN targets   t ON t.id = s.target_id
-                   WHERE e.id = ?""",
-                (endpoint_id,),
-            ).fetchone()
-        scope_root = scope_row["scope_root"] if scope_row else ""
-
-        if scope_root:
-            parsed_host = urlparse(url).hostname or ""
-            if not is_in_scope(parsed_host, scope_root):
-                logger.warning("Out-of-scope skipped: %s (scope=%s)", url, scope_root)
-                continue
-
-        with db_conn() as conn:
-            recent = conn.execute(
-                "SELECT last_scanned_at FROM endpoints WHERE id = ? AND last_scanned_at > datetime('now', ? || ' hours')",
-                (endpoint_id, f"-{NUCLEI_INTERVAL_HOURS}"),
-            ).fetchone()
-        if recent:
-            logger.info("Skipping %s — scanned recently", url)
-            continue
-
-        valid.append({**task, "scope_root": scope_root})
-
-    if not valid:
-        return
-
-    cleanup_old_outputs(OUTPUT_DIR, "nuclei_*.jsonl")
-
-    urls = [t["url"] for t in valid]
-    url_to_endpoint = {t["url"]: t["endpoint_id"] for t in valid}
-    scope_roots = {t["scope_root"] for t in valid if t["scope_root"]}
-    logger.info("Scanning batch of %d URL(s): %s", len(urls), ", ".join(urls))
+def _scan_group(r: redis_lib.Redis, group: list, template_name: str) -> None:
+    urls = [t["url"] for t in group]
+    url_to_endpoint = {t["url"]: t["endpoint_id"] for t in group}
+    logger.info(
+        "Scanning batch of %d URL(s) with template '%s': %s",
+        len(urls),
+        template_name,
+        ", ".join(urls),
+    )
 
     # one job record per URL for dashboard visibility
     job_ids = {}
-    for t in valid:
+    for t in group:
         with db_conn() as conn:
             job_ids[t["url"]] = conn.execute(
                 """INSERT INTO jobs (type, target_ref, status, started_at, worker_name)
@@ -213,16 +187,18 @@ def process_batch(r: redis_lib.Redis, tasks: list) -> None:
     out_dir = os.path.join(OUTPUT_DIR, "nuclei", "_batch")
     os.makedirs(out_dir, exist_ok=True)
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-    output_file = os.path.join(out_dir, f"nuclei_{ts}.jsonl")
+    template_slug = (template_name or "all").replace("/", "_")
+    output_file = os.path.join(out_dir, f"nuclei_{template_slug}_{ts}.jsonl")
 
     sev_names = [k for k, v in SEVERITY_ORDER.items()
                  if v >= SEVERITY_ORDER.get(SEVERITY_MIN.lower(), 2)]
     severity_arg = ",".join(sev_names)
+    template_path = _resolve_template_path(template_name)
 
     cmd = [
         "nuclei",
         "-list", url_list.name,
-        "-t", TEMPLATES_DIR,
+        "-t", template_path,
         "-severity", severity_arg,
         "-jsonl",
         "-silent",
@@ -250,7 +226,7 @@ def process_batch(r: redis_lib.Redis, tasks: list) -> None:
                 if time.monotonic() - started_monotonic > NUCLEI_PROC_TIMEOUT:
                     timed_out = True
                     proc.kill()
-                    logger.error("nuclei batch timeout exceeded — killed")
+                    logger.error("nuclei batch timeout exceeded - killed")
                     break
 
                 ready, _, _ = select.select([proc.stdout], [], [], 1.0)
@@ -275,7 +251,7 @@ def process_batch(r: redis_lib.Redis, tasks: list) -> None:
                     logger.debug("Non-JSON nuclei output: %s", line[:120])
                     continue
 
-                matched_at  = finding.get("matched-at", "")
+                matched_at = finding.get("matched-at", "")
                 endpoint_id = _find_endpoint_id(url_to_endpoint, matched_at)
                 _process_finding(r, finding, endpoint_id, output_file)
                 findings_count += 1
@@ -307,10 +283,15 @@ def process_batch(r: redis_lib.Redis, tasks: list) -> None:
         except OSError:
             pass
 
-    logger.info("nuclei batch: %d finding(s) across %d URL(s)", findings_count, len(urls))
+    logger.info(
+        "nuclei batch (%s): %d finding(s) across %d URL(s)",
+        template_name,
+        findings_count,
+        len(urls),
+    )
 
     with db_conn() as conn:
-        for t in valid:
+        for t in group:
             conn.execute(
                 "UPDATE endpoints SET last_scanned_at = datetime('now') WHERE id = ?",
                 (t["endpoint_id"],),
@@ -321,6 +302,60 @@ def process_batch(r: redis_lib.Redis, tasks: list) -> None:
                    raw_output_path = ? WHERE id = ?""",
                 (output_file, job_id),
             )
+
+
+def process_batch(r: redis_lib.Redis, tasks: list) -> None:
+    if not tasks:
+        return
+
+    valid = []
+    for task in tasks:
+        url = task.get("url")
+        endpoint_id = task.get("endpoint_id")
+        if not url or not endpoint_id:
+            logger.warning("Skipping malformed task: %s", task)
+            continue
+
+        with db_conn() as conn:
+            scope_row = conn.execute(
+                """SELECT t.scope_root, COALESCE(t.nuclei_template, 'all') AS nuclei_template
+                   FROM endpoints e
+                   JOIN subdomains s ON s.id = e.subdomain_id
+                   JOIN targets   t ON t.id = s.target_id
+                   WHERE e.id = ?""",
+                (endpoint_id,),
+            ).fetchone()
+            recent = conn.execute(
+                "SELECT last_scanned_at FROM endpoints WHERE id = ? AND last_scanned_at > datetime('now', ? || ' hours')",
+                (endpoint_id, f"-{NUCLEI_INTERVAL_HOURS}"),
+            ).fetchone()
+
+        scope_root = scope_row["scope_root"] if scope_row else ""
+        nuclei_template = scope_row["nuclei_template"] if scope_row else "all"
+
+        if scope_root:
+            parsed_host = urlparse(url).hostname or ""
+            if not is_in_scope(parsed_host, scope_root):
+                logger.warning("Out-of-scope skipped: %s (scope=%s)", url, scope_root)
+                continue
+        if recent:
+            logger.info("Skipping %s - scanned recently", url)
+            continue
+
+        valid.append({**task, "scope_root": scope_root, "nuclei_template": nuclei_template})
+
+    if not valid:
+        return
+
+    cleanup_old_outputs(OUTPUT_DIR, "nuclei_*.jsonl")
+
+    grouped = {}
+    for task in valid:
+        template_name = (task.get("nuclei_template") or "all").strip().strip("/") or "all"
+        grouped.setdefault(template_name, []).append(task)
+
+    for template_name, group in grouped.items():
+        _scan_group(r, group, template_name)
 
 
 def record_failed_job(tasks: list, reason: str) -> None:

@@ -81,7 +81,7 @@
     align-items: end;
   }
 
-  .grid-add { grid-template-columns: 1.6fr 1.4fr 0.9fr 1fr auto; }
+  .grid-add { grid-template-columns: 1.4fr 1.2fr 0.9fr 1fr 1fr auto; }
   .grid-controls { grid-template-columns: repeat(4, minmax(140px, 1fr)) auto auto; }
 
   .toolbar {
@@ -355,6 +355,10 @@
       <label class="control">
         Brute wordlist
         <select id="new-brute-wordlist"></select>
+      </label>
+      <label class="control">
+        Nuclei template
+        <select id="new-nuclei-template"></select>
       </label>
       <button id="btn-add-target">+ Add Target</button>
     </div>
@@ -802,6 +806,12 @@ function renderWordlistOptions(targetSelectId, selectedValue) {
   el.innerHTML = wordlists.map((wl) => `<option value="${escAttr(wl)}" ${wl === selectedValue ? "selected" : ""}>${esc(wl)}</option>`).join("");
 }
 
+function renderNucleiTemplateOptions(targetSelectId, selectedValue) {
+  const el = document.getElementById(targetSelectId);
+  const templates = state.meta?.allowed_nuclei_templates || ["all", "http", "network", "dns", "ssl"];
+  el.innerHTML = templates.map((tpl) => `<option value="${escAttr(tpl)}" ${tpl === selectedValue ? "selected" : ""}>${esc(tpl)}</option>`).join("");
+}
+
 function renderJobsTypeOptions() {
   const el = document.getElementById("jobs-filter-type");
   el.innerHTML = [
@@ -962,6 +972,11 @@ function targetsWordlistOptions(selected) {
   return wordlists.map((wl) => `<option value="${escAttr(wl)}" ${wl === selected ? "selected" : ""}>${esc(wl)}</option>`).join("");
 }
 
+function targetsNucleiTemplateOptions(selected) {
+  const templates = state.meta?.allowed_nuclei_templates || ["all", "http", "network", "dns", "ssl"];
+  return templates.map((tpl) => `<option value="${escAttr(tpl)}" ${tpl === selected ? "selected" : ""}>${esc(tpl)}</option>`).join("");
+}
+
 function renderTargets(progress) {
   const rows = progress.targets || [];
   document.getElementById("targets-count").textContent = `${rows.length}`;
@@ -983,6 +998,7 @@ function renderTargets(progress) {
           <div class="target-config">
             <label class="inline-check"><input type="checkbox" class="js-target-active" data-id="${num(r.id)}" ${r.active_recon ? "checked" : ""} ${enabled ? "" : "disabled"}>active recon</label>
             <select class="js-target-wordlist" data-id="${num(r.id)}" ${enabled ? "" : "disabled"}>${targetsWordlistOptions(r.brute_wordlist || "dns-small.txt")}</select>
+            <select class="js-target-template" data-id="${num(r.id)}" ${enabled ? "" : "disabled"}>${targetsNucleiTemplateOptions(r.nuclei_template || "all")}</select>
           </div>
         </td>
         <td>
@@ -1027,6 +1043,13 @@ function renderTargets(progress) {
     el.addEventListener("change", async () => {
       const id = Number(el.dataset.id);
       await patchTarget(id, { brute_wordlist: el.value });
+    });
+  });
+
+  document.querySelectorAll(".js-target-template").forEach((el) => {
+    el.addEventListener("change", async () => {
+      const id = Number(el.dataset.id);
+      await patchTarget(id, { nuclei_template: el.value });
     });
   });
 }
@@ -1270,6 +1293,7 @@ async function addTarget() {
   const notes = document.getElementById("new-notes").value.trim();
   const activeRecon = document.getElementById("new-active-recon").checked;
   const bruteWordlist = document.getElementById("new-brute-wordlist").value;
+  const nucleiTemplate = document.getElementById("new-nuclei-template").value;
 
   if (!domain) {
     showFormMsg("err", "Enter a domain.");
@@ -1285,6 +1309,7 @@ async function addTarget() {
         notes: notes || null,
         active_recon: activeRecon,
         brute_wordlist: bruteWordlist,
+        nuclei_template: nucleiTemplate,
       }),
     });
 
@@ -1426,6 +1451,7 @@ async function loadMeta() {
   } catch {
     state.meta = {
       allowed_wordlists: ["dns-small.txt", "dns-medium.txt", "dns-large.txt"],
+      allowed_nuclei_templates: ["all", "http", "network", "dns", "ssl"],
       recon_interval_hours: 24,
     };
   }
@@ -1438,6 +1464,7 @@ async function bootstrap() {
 
   await loadMeta();
   renderWordlistOptions("new-brute-wordlist", state.meta.allowed_wordlists?.[0] || "dns-small.txt");
+  renderNucleiTemplateOptions("new-nuclei-template", state.meta.allowed_nuclei_templates?.[0] || "all");
   renderJobsTypeOptions();
   bindControls();
   setControlsToDom();

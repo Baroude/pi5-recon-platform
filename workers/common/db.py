@@ -135,6 +135,14 @@ def init_db(path: str = None) -> None:
     except sqlite3.OperationalError:
         pass
 
+    try:
+        conn.execute(
+            "ALTER TABLE targets ADD COLUMN nuclei_template TEXT NOT NULL DEFAULT 'all'"
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
     conn.commit()
     conn.close()
     logger.info("DB ready: %s", p)
