@@ -12,6 +12,7 @@ Endpoints
   DELETE /targets/{id}       Disable a target (sets enabled=0).
   GET  /targets/{id}/jobs    Recent jobs for a target.
   GET  /findings             Recent findings (supports severity/target/window filters).
+  GET  /findings/{id}        Full finding details with best-effort raw nuclei event.
   GET  /health               Liveness probe.
 """
 
@@ -78,6 +79,7 @@ _DEFAULT_ALLOWED_NUCLEI_TEMPLATES = {
     "dns",
     "ssl",
 }
+_OUTPUT_DIR = os.path.abspath(os.environ.get("OUTPUT_DIR", "/data/output"))
 _STATIC_DIR = "/app/static" if os.path.isdir("/app/static") else os.path.join(os.path.dirname(__file__), "static")
 
 
@@ -95,6 +97,57 @@ def _parse_allowed_nuclei_templates() -> set[str]:
 
 
 _ALLOWED_NUCLEI_TEMPLATES = _parse_allowed_nuclei_templates()
+
+
+def _is_path_within_base(candidate_path: str, base_dir: str) -> bool:
+    candidate_abs = os.path.abspath(candidate_path)
+    base_abs = os.path.abspath(base_dir)
+    try:
+        return os.path.commonpath([candidate_abs, base_abs]) == base_abs
+    except ValueError:
+        return False
+
+
+def _load_raw_event_for_finding(row: dict) -> tuple[Optional[dict], Optional[str]]:
+    raw_blob_path = row.get("raw_blob_path")
+    template_id = row.get("template_id")
+    matched_at = row.get("matched_at")
+    if not raw_blob_path:
+        return None, "No raw blob path is associated with this finding."
+
+    if not _is_path_within_base(raw_blob_path, _OUTPUT_DIR):
+        return None, f"Raw blob path is outside allowed output directory ({_OUTPUT_DIR})."
+
+    if not os.path.isfile(raw_blob_path):
+        return None, f"Raw blob file not found: {raw_blob_path}"
+
+    fallback_event = None
+    try:
+        with open(raw_blob_path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                payload = line.strip()
+                if not payload:
+                    continue
+                try:
+                    event = json.loads(payload)
+                except Exception:
+                    continue
+
+                if event.get("template-id") != template_id:
+                    continue
+
+                if event.get("matched-at") == matched_at:
+                    return event, None
+
+                if fallback_event is None:
+                    fallback_event = event
+    except Exception as exc:
+        return None, f"Failed reading raw blob: {exc}"
+
+    if fallback_event is not None:
+        return fallback_event, "Exact event match not found; showing first event with the same template-id."
+
+    return None, "No matching event found in raw blob."
 
 
 def get_r() -> redis_lib.Redis:
@@ -714,6 +767,35 @@ def list_findings(
             },
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+@app.get("/findings/{finding_id}")
+def get_finding_detail(finding_id: int):
+    with db_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT f.id, f.endpoint_id, f.scanner, f.template_id, f.severity, f.title, f.matched_at,
+                   f.first_seen, f.last_seen, f.raw_blob_path, f.dedupe_key,
+                   e.url, e.host, e.scheme, e.port, e.status_code, e.technologies,
+                   s.hostname,
+                   t.id AS target_id, t.scope_root
+            FROM findings f
+            LEFT JOIN endpoints e ON e.id = f.endpoint_id
+            LEFT JOIN subdomains s ON s.id = e.subdomain_id
+            LEFT JOIN targets t ON t.id = s.target_id
+            WHERE f.id = ?
+            """,
+            (finding_id,),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    detail = dict(row)
+    raw_event, raw_event_error = _load_raw_event_for_finding(detail)
+    detail["raw_event"] = raw_event
+    detail["raw_event_error"] = raw_event_error
+    return detail
 
 
 @app.get("/subdomains")

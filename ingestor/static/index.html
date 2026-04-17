@@ -519,6 +519,7 @@
           <th>Target</th>
           <th>URL</th>
           <th>First Seen</th>
+          <th>Actions</th>
         </tr></thead>
         <tbody id="findings-tbody"></tbody>
       </table>
@@ -1129,12 +1130,116 @@ function renderDlq(data) {
   el.innerHTML = items.map((i) => `<div class="dlq-item">[${esc(i.queue)}] ${esc(JSON.stringify(i, null, 2))}</div>`).join("");
 }
 
+function findingText(value) {
+  if (value == null || value === "") return "-";
+  return String(value);
+}
+
+function popupDocument(title, bodyHtml) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${esc(title)}</title>
+<style>
+  body { font-family: "Segoe UI", Tahoma, sans-serif; margin: 0; padding: 16px; color: #0f172a; background: #f8fafc; }
+  h1 { margin: 0 0 6px; font-size: 20px; }
+  .subtitle { margin: 0 0 14px; color: #475569; font-size: 14px; }
+  h2 { margin: 16px 0 8px; font-size: 15px; }
+  .meta { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #cbd5e1; }
+  .meta th, .meta td { border-top: 1px solid #e2e8f0; padding: 8px 10px; text-align: left; vertical-align: top; font-size: 13px; }
+  .meta th { width: 180px; color: #334155; background: #f1f5f9; font-weight: 600; }
+  pre { margin: 0; background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 12px; overflow-x: auto; font-size: 12px; line-height: 1.45; }
+  .warn { margin: 8px 0 10px; background: #fef3c7; border: 1px solid #f59e0b; color: #7c2d12; padding: 8px 10px; border-radius: 6px; font-size: 13px; }
+</style>
+</head>
+<body>${bodyHtml}</body>
+</html>`;
+}
+
+function openFindingDetailPopup(popup, detail) {
+  const fields = [
+    ["Finding ID", detail.id],
+    ["Severity", detail.severity],
+    ["Title", detail.title],
+    ["Scanner", detail.scanner],
+    ["Template ID", detail.template_id],
+    ["Matched At", detail.matched_at],
+    ["First Seen", ts(detail.first_seen)],
+    ["Last Seen", ts(detail.last_seen)],
+    ["Target", detail.scope_root],
+    ["Hostname", detail.hostname || detail.host],
+    ["URL", detail.url],
+    ["Status Code", detail.status_code],
+    ["Technologies", detail.technologies],
+    ["Raw Blob Path", detail.raw_blob_path],
+    ["Dedupe Key", detail.dedupe_key],
+  ];
+
+  const rows = fields.map(([label, value]) => `
+    <tr>
+      <th>${esc(label)}</th>
+      <td>${esc(findingText(value))}</td>
+    </tr>
+  `).join("");
+
+  const rawEventText = detail.raw_event
+    ? JSON.stringify(detail.raw_event, null, 2)
+    : "No raw nuclei event payload available.";
+
+  const warning = detail.raw_event_error
+    ? `<div class="warn">${esc(detail.raw_event_error)}</div>`
+    : "";
+
+  const body = `
+    <h1>Finding #${esc(findingText(detail.id))}</h1>
+    <p class="subtitle">${esc(findingText(detail.title))}</p>
+    <table class="meta"><tbody>${rows}</tbody></table>
+    <h2>Raw Event</h2>
+    ${warning}
+    <pre>${esc(rawEventText)}</pre>
+  `;
+
+  popup.document.open();
+  popup.document.write(popupDocument(`Finding #${findingText(detail.id)}`, body));
+  popup.document.close();
+  popup.focus();
+}
+
+async function showFindingDetails(findingId) {
+  const popup = window.open("", "finding-details", "popup=yes,width=980,height=760,resizable=yes,scrollbars=yes");
+  if (!popup) {
+    showFormMsg("err", "Popup blocked. Allow popups for this page to view finding details.");
+    return;
+  }
+
+  popup.document.open();
+  popup.document.write(popupDocument("Finding details", "<h1>Loading finding details...</h1>"));
+  popup.document.close();
+
+  try {
+    const detail = await apiFetch(`/findings/${findingId}`);
+    openFindingDetailPopup(popup, detail);
+  } catch (e) {
+    popup.document.open();
+    popup.document.write(
+      popupDocument(
+        "Finding details",
+        `<h1>Failed to load finding #${esc(findingText(findingId))}</h1><div class="warn">${esc(e.message)}</div>`
+      )
+    );
+    popup.document.close();
+    showFormMsg("err", `Finding detail fetch failed: ${e.message}`);
+  }
+}
+
 function renderFindings(rows) {
   document.getElementById("findings-count").textContent = `${rows.length}`;
   const tbody = document.getElementById("findings-tbody");
 
   if (!rows.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No findings for selected filters.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No findings for selected filters.</td></tr>';
     return;
   }
 
@@ -1146,8 +1251,17 @@ function renderFindings(rows) {
       <td class="mono muted">${esc(r.scope_root || "-")}</td>
       <td class="mono" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.url || "-")}</td>
       <td><span class="muted js-rel" data-ts="${escAttr(r.first_seen || "")}" title="${escAttr(ts(r.first_seen))}">${esc(relTs(r.first_seen))}</span></td>
+      <td><button class="sm ghost js-finding-details" data-id="${num(r.id)}">Details</button></td>
     </tr>
   `).join("");
+
+  document.querySelectorAll(".js-finding-details").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const findingId = Number(btn.dataset.id);
+      if (!findingId) return;
+      await showFindingDetails(findingId);
+    });
+  });
 }
 
 function renderSubdomains(rows) {
