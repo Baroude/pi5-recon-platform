@@ -23,6 +23,7 @@ import hashlib
 import json
 import logging
 import os
+import select
 import subprocess
 import sys
 import threading
@@ -60,6 +61,10 @@ OUTPUT_DIR            = os.environ.get("OUTPUT_DIR", "/data/output")
 TEMPLATE_UPDATE_HOURS = float(os.environ.get("NUCLEI_TEMPLATES_UPDATE_INTERVAL_HOURS", 24))
 NUCLEI_THROTTLE_SECS  = int(os.environ.get("NUCLEI_THROTTLE_SECS", 30))
 NUCLEI_PROC_TIMEOUT   = int(os.environ.get("NUCLEI_PROC_TIMEOUT", 1800))
+NUCLEI_RATE_LIMIT     = int(os.environ.get("NUCLEI_RATE_LIMIT", 10))
+NUCLEI_BULK_SIZE      = int(os.environ.get("NUCLEI_BULK_SIZE", 25))
+NUCLEI_TIMEOUT_SECS   = int(os.environ.get("NUCLEI_TIMEOUT_SECS", 15))
+NUCLEI_RETRIES        = int(os.environ.get("NUCLEI_RETRIES", 1))
 
 SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
@@ -197,11 +202,11 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
         "-jsonl",
         "-silent",
         "-no-color",
-        "-rate-limit", "10",
-        "-bulk-size", "25",
+        "-rate-limit", str(NUCLEI_RATE_LIMIT),
+        "-bulk-size", str(NUCLEI_BULK_SIZE),
         "-c", str(MAX_CONCURRENCY),
-        "-timeout", "15",
-        "-retries", "1",
+        "-timeout", str(NUCLEI_TIMEOUT_SECS),
+        "-retries", str(NUCLEI_RETRIES),
     ]
 
     findings_count = 0
@@ -209,8 +214,33 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
+        started_monotonic = time.monotonic()
+        timed_out = False
+
         with open(output_file, "w") as fh:
-            for line in proc.stdout:
+            while True:
+                if proc.stdout is None:
+                    break
+
+                elapsed = time.monotonic() - started_monotonic
+                if elapsed > NUCLEI_PROC_TIMEOUT:
+                    timed_out = True
+                    proc.kill()
+                    logger.error("nuclei process timeout exceeded for %s - killed", url)
+                    break
+
+                ready, _, _ = select.select([proc.stdout], [], [], 1.0)
+                if not ready:
+                    if proc.poll() is not None:
+                        break
+                    continue
+
+                line = proc.stdout.readline()
+                if line == "":
+                    if proc.poll() is not None:
+                        break
+                    continue
+
                 line = line.strip()
                 if not line:
                     continue
@@ -223,11 +253,23 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                 _process_finding(r, finding, endpoint_id, output_file)
                 findings_count += 1
 
-        try:
-            proc.wait(timeout=NUCLEI_PROC_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            logger.error("nuclei process timeout exceeded for %s — killed", url)
+        if proc.poll() is None:
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+        if not timed_out and proc.returncode not in (0, None):
+            stderr_tail = (proc.stderr.read() if proc.stderr else "").strip()
+            if stderr_tail:
+                logger.warning(
+                    "nuclei exited with code %s for %s: %s",
+                    proc.returncode,
+                    url,
+                    stderr_tail[-500:],
+                )
+            else:
+                logger.warning("nuclei exited with code %s for %s", proc.returncode, url)
 
     except Exception:
         with db_conn() as conn:
@@ -296,7 +338,7 @@ def main():
     t = threading.Thread(target=_template_updater_loop, daemon=True)
     t.start()
 
-    logger.info("Listening on queue: %s", NOTIFY_QUEUE)
+    logger.info("Listening on queue: %s", QUEUE)
 
     while True:
         try:
@@ -324,3 +366,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

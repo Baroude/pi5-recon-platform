@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import queue as thread_queue
+import select
 import subprocess
 import sys
 import threading
@@ -89,24 +90,61 @@ def _stream_into_queue(
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
+        started_monotonic = time.monotonic()
+        timed_out = False
+
         with open(output_file, "w") as fh:
-            for line in proc.stdout:
+            while True:
+                if proc.stdout is None:
+                    break
+
+                elapsed = time.monotonic() - started_monotonic
+                if elapsed > proc_timeout:
+                    timed_out = True
+                    proc.kill()
+                    logger.error("%s process timeout exceeded - killed", tool_name)
+                    break
+
+                ready, _, _ = select.select([proc.stdout], [], [], 1.0)
+                if not ready:
+                    if proc.poll() is not None:
+                        break
+                    continue
+
+                line = proc.stdout.readline()
+                if line == "":
+                    if proc.poll() is not None:
+                        break
+                    continue
+
                 hostname = line.strip()
                 if hostname:
                     fh.write(hostname + "\n")
                     out_q.put((hostname, tool_name))
-        try:
-            proc.wait(timeout=proc_timeout)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            logger.error("%s process timeout exceeded — killed", tool_name)
+
+        if proc.poll() is None:
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+        if not timed_out and proc.returncode not in (0, None):
+            stderr_tail = (proc.stderr.read() if proc.stderr else "").strip()
+            if stderr_tail:
+                logger.warning(
+                    "%s exited with code %s: %s",
+                    tool_name,
+                    proc.returncode,
+                    stderr_tail[-500:],
+                )
+            else:
+                logger.warning("%s exited with code %s", tool_name, proc.returncode)
     except FileNotFoundError:
-        logger.warning("%s binary not found — skipping", tool_name)
+        logger.warning("%s binary not found - skipping", tool_name)
     except Exception as exc:
         logger.error("%s unexpected error: %s", tool_name, exc)
     finally:
         out_q.put((None, tool_name))
-
 
 def process_task(r: redis_lib.Redis, task: dict) -> None:
     domain = task.get("domain") or task.get("target")
@@ -327,3 +365,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
