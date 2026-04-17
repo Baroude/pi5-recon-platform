@@ -9,7 +9,7 @@ FROM --platform=linux/arm64 projectdiscovery/subfinder:v2.6.6 AS subfinder-src
 FROM --platform=linux/arm64 python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl unzip \
+        ca-certificates curl unzip musl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=subfinder-src /usr/local/bin/subfinder /usr/local/bin/subfinder

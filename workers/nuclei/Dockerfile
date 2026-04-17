@@ -8,7 +8,7 @@ FROM --platform=linux/arm64 projectdiscovery/nuclei:v3.2.9 AS nuclei-src
 FROM --platform=linux/arm64 python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates \
+        ca-certificates musl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=nuclei-src /usr/local/bin/nuclei /usr/local/bin/nuclei

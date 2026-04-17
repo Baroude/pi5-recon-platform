@@ -9,7 +9,7 @@ FROM --platform=linux/arm64 projectdiscovery/httpx:v1.6.10 AS httpx-src
 FROM --platform=linux/arm64 python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates \
+        ca-certificates musl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=httpx-src /usr/local/bin/httpx /usr/local/bin/httpx
