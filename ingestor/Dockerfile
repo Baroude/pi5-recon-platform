@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+ARG CACHE_BUST=1
 COPY workers/common /app/common
 COPY ingestor/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

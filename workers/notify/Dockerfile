@@ -2,6 +2,7 @@ FROM --platform=linux/arm64 python:3.12-slim
 
 WORKDIR /app
 
+ARG CACHE_BUST=1
 COPY workers/notify/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 RUN mkdir -p /logs

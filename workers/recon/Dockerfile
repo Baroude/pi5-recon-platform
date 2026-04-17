@@ -26,6 +26,7 @@ RUN curl -fsSL https://github.com/owasp-amass/amass/releases/download/v4.2.0/ama
 
 WORKDIR /app
 
+ARG CACHE_BUST=1
 COPY workers/common /app/common
 COPY workers/recon/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

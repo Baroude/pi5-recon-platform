@@ -18,6 +18,7 @@ RUN curl -fsSL https://github.com/projectdiscovery/nuclei/releases/download/v3.2
 
 WORKDIR /app
 
+ARG CACHE_BUST=1
 COPY workers/common /app/common
 COPY workers/nuclei/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
