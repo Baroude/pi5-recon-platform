@@ -100,7 +100,7 @@ def _normalize_url(raw_url: str) -> str:
 
 def _content_hash(record: dict) -> str:
     """Stable fingerprint for an httpx result — changes = changed endpoint."""
-    sig = f"{record.get('status-code')}|{record.get('title')}|{record.get('webserver')}"
+    sig = f"{record.get('status_code')}|{record.get('title')}|{record.get('webserver')}"
     return hashlib.sha1(sig.encode()).hexdigest()[:12]
 
 
@@ -209,7 +209,7 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
     with db_conn() as conn:
         for rec in records:
             url         = _normalize_url(rec.get("url", ""))
-            status_code = rec.get("status-code")
+            status_code = rec.get("status_code")
             alive       = bool(url and status_code and 100 <= int(status_code) < 600)
 
             if not url:
