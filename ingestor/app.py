@@ -22,6 +22,8 @@ from typing import Optional
 
 import redis as redis_lib
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
 sys.path.insert(0, "/app")
@@ -72,6 +74,11 @@ def on_startup():
     _refresh_thread = threading.Thread(target=_refresh_loop, daemon=True, name="refresh")
     _refresh_thread.start()
     logger.info("Ingestor ready")
+
+
+@app.get("/", include_in_schema=False)
+def root():
+    return RedirectResponse(url="/ui/index.html")
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +196,20 @@ def health():
             detail={"status": "unhealthy", "issues": issues},
         )
     return {"status": "ok"}
+
+
+@app.get("/admin/queues")
+def queue_status():
+    """Return live depth for all work queues and their DLQs."""
+    r = get_r()
+    result = {}
+    for q in _DLQ_QUEUES:
+        result[q] = {
+            "pending": r.llen(q),
+            "processing": r.llen(f"processing:{q}"),
+            "dlq": r.llen(f"dlq:{q}"),
+        }
+    return result
 
 
 @app.get("/admin/dlq")
@@ -322,3 +343,6 @@ def list_subdomains(
             {"tid": target_id, "lim": limit},
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+app.mount("/ui", StaticFiles(directory="/app/static", html=True), name="ui")

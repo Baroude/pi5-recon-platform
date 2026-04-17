@@ -11,6 +11,7 @@ COPY ingestor/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ingestor/app.py .
+COPY ingestor/static /app/static
 
 RUN mkdir -p /data/db /logs
 

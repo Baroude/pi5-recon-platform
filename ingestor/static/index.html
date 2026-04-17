@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recon Platform</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #388bfd;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --orange: #f0883e;
+    --red: #f85149;
+    --purple: #bc8cff;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  header h1 { font-size: 16px; font-weight: 600; letter-spacing: .5px; }
+
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+  }
+  .status-dot.ok { background: var(--green); }
+  .status-dot.err { background: var(--red); }
+
+  .refresh-info { margin-left: auto; color: var(--muted); font-size: 12px; }
+
+  main { max-width: 1400px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 24px; }
+
+  /* ---- Add target form ---- */
+  .add-form {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .add-form label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; flex: 1; min-width: 200px; }
+  .add-form input[type=text], .add-form input[type=url] {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 7px 10px;
+    font-size: 14px;
+    width: 100%;
+    outline: none;
+  }
+  .add-form input:focus { border-color: var(--accent); }
+
+  button {
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 16px;
+    white-space: nowrap;
+  }
+  button:hover { opacity: .85; }
+  button.danger { background: var(--red); }
+  button.sm { padding: 4px 10px; font-size: 12px; font-weight: 500; }
+
+  .form-msg { font-size: 13px; align-self: center; }
+  .form-msg.ok { color: var(--green); }
+  .form-msg.err { color: var(--red); }
+
+  /* ---- Queue cards ---- */
+  .queues { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+
+  .queue-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .queue-card h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 10px; }
+  .queue-metrics { display: flex; gap: 16px; }
+  .metric { display: flex; flex-direction: column; gap: 2px; }
+  .metric .val { font-size: 22px; font-weight: 700; }
+  .metric .lbl { font-size: 11px; color: var(--muted); }
+  .val.warn { color: var(--yellow); }
+  .val.err  { color: var(--red); }
+  .val.ok   { color: var(--green); }
+
+  /* ---- Section ---- */
+  section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  section h2 {
+    font-size: 13px;
+    font-weight: 600;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  section h2 .count {
+    background: var(--border);
+    border-radius: 10px;
+    font-size: 11px;
+    padding: 1px 7px;
+    font-weight: 500;
+    color: var(--muted);
+    margin-left: auto;
+  }
+
+  /* ---- Table ---- */
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    background: var(--bg);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .4px;
+    padding: 8px 12px;
+    text-align: left;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  tbody tr { border-top: 1px solid var(--border); }
+  tbody tr:hover { background: #1c2128; }
+  td { padding: 8px 12px; vertical-align: middle; }
+  td.mono { font-family: "SF Mono", "Fira Code", monospace; font-size: 12px; }
+
+  .badge {
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 6px;
+    text-transform: uppercase;
+    display: inline-block;
+  }
+  .badge.critical { background: #4a1818; color: var(--red); }
+  .badge.high     { background: #3d2010; color: var(--orange); }
+  .badge.medium   { background: #3d2f00; color: var(--yellow); }
+  .badge.low      { background: #112a18; color: var(--green); }
+  .badge.info     { background: #112244; color: var(--accent); }
+  .badge.done     { background: #112a18; color: var(--green); }
+  .badge.failed   { background: #4a1818; color: var(--red); }
+  .badge.running  { background: #112244; color: var(--accent); }
+  .badge.pending  { background: #222; color: var(--muted); }
+  .badge.enabled  { background: #112a18; color: var(--green); }
+  .badge.disabled { background: #222; color: var(--muted); }
+
+  /* ---- DLQ errors ---- */
+  .dlq-list { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .dlq-item {
+    background: #1c1010;
+    border: 1px solid #4a1818;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 12px;
+    color: #f8a0a0;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .dlq-empty { padding: 12px 16px; color: var(--muted); font-size: 13px; }
+
+  .empty-row td { color: var(--muted); font-style: italic; text-align: center; padding: 24px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="status-dot" id="health-dot"></div>
+  <h1>Recon Platform</h1>
+  <span class="refresh-info" id="refresh-ts">Loading…</span>
+</header>
+
+<main>
+
+  <!-- Add target -->
+  <div class="add-form">
+    <label>
+      Add target
+      <input type="text" id="new-domain" placeholder="example.com" autocomplete="off" spellcheck="false">
+    </label>
+    <label>
+      Notes (optional)
+      <input type="text" id="new-notes" placeholder="Bug bounty program">
+    </label>
+    <button onclick="addTarget()">+ Add Target</button>
+    <span class="form-msg" id="form-msg"></span>
+  </div>
+
+  <!-- Queue status -->
+  <div class="queues" id="queues"></div>
+
+  <!-- Targets -->
+  <section>
+    <h2>Targets <span class="count" id="targets-count">0</span></h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Domain</th>
+          <th>Status</th>
+          <th>Subdomains</th>
+          <th>Last Recon</th>
+          <th>Notes</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="targets-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- DLQ errors -->
+  <section id="dlq-section">
+    <h2>Errors (DLQ) <span class="count" id="dlq-count">0</span></h2>
+    <div id="dlq-content" class="dlq-empty">No errors.</div>
+  </section>
+
+  <!-- Findings -->
+  <section>
+    <h2>Findings <span class="count" id="findings-count">0</span></h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Severity</th>
+          <th>Title</th>
+          <th>Host</th>
+          <th>URL</th>
+          <th>First Seen</th>
+        </tr></thead>
+        <tbody id="findings-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Subdomains -->
+  <section>
+    <h2>Subdomains <span class="count" id="subdomains-count">0</span></h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Hostname</th>
+          <th>Target</th>
+          <th>Source</th>
+          <th>First Seen</th>
+          <th>Last Seen</th>
+        </tr></thead>
+        <tbody id="subdomains-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<script>
+const BASE = window.location.origin;
+
+function ts(s) {
+  if (!s) return '—';
+  const d = new Date(s.endsWith('Z') || s.includes('+') ? s : s + 'Z');
+  return d.toLocaleString();
+}
+
+function relTs(s) {
+  if (!s) return '—';
+  const d = new Date(s.endsWith('Z') || s.includes('+') ? s : s + 'Z');
+  const diff = Math.floor((Date.now() - d) / 1000);
+  if (diff < 60)   return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
+
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function numClass(n) {
+  if (n === 0) return 'ok';
+  if (n < 5)   return 'warn';
+  return 'err';
+}
+
+async function apiFetch(path) {
+  const r = await fetch(BASE + path);
+  if (!r.ok) throw new Error(r.statusText);
+  return r.json();
+}
+
+// ---------- health ----------
+async function refreshHealth() {
+  const dot = document.getElementById('health-dot');
+  try {
+    await apiFetch('/health');
+    dot.className = 'status-dot ok';
+  } catch {
+    dot.className = 'status-dot err';
+  }
+}
+
+// ---------- queues ----------
+const QUEUE_LABELS = {
+  recon_domain: 'Recon',
+  probe_host:   'HTTPX',
+  scan_http:    'Nuclei',
+  notify_finding: 'Notify',
+};
+
+async function refreshQueues() {
+  const data = await apiFetch('/admin/queues');
+  const el = document.getElementById('queues');
+  el.innerHTML = Object.entries(data).map(([q, v]) => `
+    <div class="queue-card">
+      <h3>${esc(QUEUE_LABELS[q] || q)}</h3>
+      <div class="queue-metrics">
+        <div class="metric">
+          <span class="val ${numClass(v.pending)}">${v.pending}</span>
+          <span class="lbl">Pending</span>
+        </div>
+        <div class="metric">
+          <span class="val">${v.processing}</span>
+          <span class="lbl">Running</span>
+        </div>
+        <div class="metric">
+          <span class="val ${v.dlq > 0 ? 'err' : 'ok'}">${v.dlq}</span>
+          <span class="lbl">Failed</span>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ---------- targets ----------
+async function refreshTargets() {
+  const rows = await apiFetch('/targets');
+  document.getElementById('targets-count').textContent = rows.length;
+  const tbody = document.getElementById('targets-tbody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No targets yet. Add one above.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td class="mono">${esc(r.scope_root)}</td>
+      <td><span class="badge ${r.enabled ? 'enabled' : 'disabled'}">${r.enabled ? 'Active' : 'Disabled'}</span></td>
+      <td>${r.subdomain_count ?? 0}</td>
+      <td>${relTs(r.last_recon)}</td>
+      <td style="color:var(--muted)">${esc(r.notes) || '—'}</td>
+      <td><button class="sm danger" onclick="disableTarget(${r.id}, '${esc(r.scope_root)}')">Remove</button></td>
+    </tr>
+  `).join('');
+}
+
+// ---------- DLQ ----------
+async function refreshDlq() {
+  const data = await apiFetch('/admin/dlq');
+  let total = 0;
+  const items = [];
+  for (const [q, v] of Object.entries(data)) {
+    total += v.depth;
+    for (const item of v.recent) {
+      items.push({ queue: q, ...item });
+    }
+  }
+  document.getElementById('dlq-count').textContent = total;
+  const el = document.getElementById('dlq-content');
+  if (!items.length) {
+    el.className = 'dlq-empty';
+    el.textContent = 'No errors.';
+    return;
+  }
+  el.className = 'dlq-list';
+  el.innerHTML = items.map(i => `<div class="dlq-item">[${esc(i.queue)}] ${esc(JSON.stringify(i, null, 2))}</div>`).join('');
+}
+
+// ---------- findings ----------
+const SEV_ORDER = ['critical','high','medium','low','info'];
+
+async function refreshFindings() {
+  const rows = await apiFetch('/findings?limit=100');
+  document.getElementById('findings-count').textContent = rows.length;
+  const tbody = document.getElementById('findings-tbody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No findings yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td><span class="badge ${esc(r.severity?.toLowerCase())}">${esc(r.severity)}</span></td>
+      <td>${esc(r.title)}</td>
+      <td class="mono">${esc(r.host)}</td>
+      <td class="mono" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.url)}</td>
+      <td style="color:var(--muted)">${relTs(r.first_seen)}</td>
+    </tr>
+  `).join('');
+}
+
+// ---------- subdomains ----------
+async function refreshSubdomains() {
+  const rows = await apiFetch('/subdomains?limit=200');
+  document.getElementById('subdomains-count').textContent = rows.length;
+  const tbody = document.getElementById('subdomains-tbody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No subdomains found yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td class="mono">${esc(r.hostname)}</td>
+      <td class="mono" style="color:var(--muted)">${esc(r.scope_root)}</td>
+      <td style="color:var(--muted)">${esc(r.source)}</td>
+      <td style="color:var(--muted)">${relTs(r.first_seen)}</td>
+      <td style="color:var(--muted)">${relTs(r.last_seen)}</td>
+    </tr>
+  `).join('');
+}
+
+// ---------- actions ----------
+async function addTarget() {
+  const domain = document.getElementById('new-domain').value.trim();
+  const notes  = document.getElementById('new-notes').value.trim();
+  const msg    = document.getElementById('form-msg');
+  if (!domain) { msg.className = 'form-msg err'; msg.textContent = 'Enter a domain.'; return; }
+
+  try {
+    const r = await fetch(`${BASE}/targets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope_root: domain, notes: notes || null }),
+    });
+    const body = await r.json();
+    if (!r.ok) {
+      const detail = body.detail;
+      const errMsg = Array.isArray(detail) ? detail.map(e => e.msg).join(', ') : (detail || r.statusText);
+      msg.className = 'form-msg err'; msg.textContent = errMsg;
+      return;
+    }
+    msg.className = 'form-msg ok'; msg.textContent = `Queued: ${domain}`;
+    document.getElementById('new-domain').value = '';
+    document.getElementById('new-notes').value = '';
+    setTimeout(() => { msg.textContent = ''; }, 4000);
+    refreshAll();
+  } catch (e) {
+    msg.className = 'form-msg err'; msg.textContent = e.message;
+  }
+}
+
+async function disableTarget(id, domain) {
+  if (!confirm(`Remove target "${domain}"?\n\nThis disables it — existing data is kept.`)) return;
+  await fetch(`${BASE}/targets/${id}`, { method: 'DELETE' });
+  refreshAll();
+}
+
+document.getElementById('new-domain').addEventListener('keydown', e => {
+  if (e.key === 'Enter') addTarget();
+});
+
+// ---------- main loop ----------
+async function refreshAll() {
+  const now = new Date().toLocaleTimeString();
+  document.getElementById('refresh-ts').textContent = `Last update: ${now}`;
+  await Promise.allSettled([
+    refreshHealth(),
+    refreshQueues(),
+    refreshTargets(),
+    refreshDlq(),
+    refreshFindings(),
+    refreshSubdomains(),
+  ]);
+}
+
+refreshAll();
+setInterval(refreshAll, 5000);
+</script>
+</body>
+</html>
