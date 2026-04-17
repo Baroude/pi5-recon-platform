@@ -62,6 +62,7 @@ NUCLEI_BATCH_SIZE     = int(os.environ.get("NUCLEI_BATCH_SIZE", 1))
 OUTPUT_DIR            = os.environ.get("OUTPUT_DIR", "/data/output")
 TEMPLATE_UPDATE_HOURS = float(os.environ.get("NUCLEI_TEMPLATES_UPDATE_INTERVAL_HOURS", 24))
 NUCLEI_PROC_TIMEOUT   = int(os.environ.get("NUCLEI_PROC_TIMEOUT", 1800))
+NUCLEI_THROTTLE_SECS  = int(os.environ.get("NUCLEI_THROTTLE_SECS", 30))
 NUCLEI_RATE_LIMIT     = int(os.environ.get("NUCLEI_RATE_LIMIT", 10))
 NUCLEI_BULK_SIZE      = int(os.environ.get("NUCLEI_BULK_SIZE", 25))
 NUCLEI_TIMEOUT_SECS   = int(os.environ.get("NUCLEI_TIMEOUT_SECS", 15))
@@ -159,9 +160,36 @@ def _resolve_template_path(template_name: str) -> str:
     return candidate
 
 
+def _wait_for_scope_throttle(r: redis_lib.Redis, scope_root: str) -> None:
+    """
+    Enforce a minimum delay between nuclei batch starts for the same scope_root.
+
+    Uses Redis so the throttle applies across multiple worker replicas.
+    """
+    if NUCLEI_THROTTLE_SECS <= 0 or not scope_root:
+        return
+
+    throttle_key = f"throttle:nuclei:{scope_root}"
+    while True:
+        acquired = r.set(throttle_key, "1", nx=True, ex=NUCLEI_THROTTLE_SECS)
+        if acquired:
+            return
+
+        ttl = r.ttl(throttle_key)
+        wait_secs = ttl if ttl and ttl > 0 else 1
+        logger.info(
+            "Throttling nuclei for scope %s - waiting %ds before next batch",
+            scope_root,
+            wait_secs,
+        )
+        time.sleep(wait_secs)
+
+
 def _scan_group(r: redis_lib.Redis, group: list, template_name: str) -> None:
     urls = [t["url"] for t in group]
     url_to_endpoint = {t["url"]: t["endpoint_id"] for t in group}
+    scope_root = group[0].get("scope_root", "") if group else ""
+    _wait_for_scope_throttle(r, scope_root)
     logger.info(
         "Scanning batch of %d URL(s) with template '%s': %s",
         len(urls),
@@ -351,10 +379,11 @@ def process_batch(r: redis_lib.Redis, tasks: list) -> None:
 
     grouped = {}
     for task in valid:
+        scope_root = task.get("scope_root") or ""
         template_name = (task.get("nuclei_template") or "all").strip().strip("/") or "all"
-        grouped.setdefault(template_name, []).append(task)
+        grouped.setdefault((scope_root, template_name), []).append(task)
 
-    for template_name, group in grouped.items():
+    for (_, template_name), group in grouped.items():
         _scan_group(r, group, template_name)
 
 

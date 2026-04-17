@@ -22,7 +22,7 @@ recon_domain -> brute_domain -> probe_host
 
 - validates domain
 - inserts or re-enables target
-- stores `active_recon` and `brute_wordlist`
+- stores `active_recon`, `brute_wordlist`, and `nuclei_template`
 - enqueues initial `recon_domain`
 
 ## 2. Passive Recon (`worker-recon`)
@@ -62,6 +62,7 @@ recon_domain -> brute_domain -> probe_host
 - consumes `scan_http`
 - enforces scan interval with `endpoints.last_scanned_at`
 - applies per-scope throttle (`NUCLEI_THROTTLE_SECS`)
+- groups batches by `scope_root` and `nuclei_template`
 - streams nuclei JSONL output
 - deduplicates findings by `sha1(template_id|matched_at)`
 - enqueues `notify_finding` (`new_finding`) for new rows meeting severity threshold

@@ -2,6 +2,13 @@
 
 All runtime configuration is environment-variable based.
 
+Two default layers exist:
+
+- worker/application fallback defaults in code
+- deployment defaults in `docker-compose.yml`
+
+When they differ, the compose file wins for the standard stack deployment.
+
 ## Core
 
 | Variable | Default | Required | Notes |
@@ -10,6 +17,12 @@ All runtime configuration is environment-variable based.
 | `SQLITE_PATH` | `/data/db/recon.db` | Yes | Shared SQLite path in containers. |
 | `OUTPUT_DIR` | `/data/output` | Workers only | Base output directory for tool artifacts. |
 | `INGESTOR_PORT` | `8090` | No | Exposed host port for API/dashboard. |
+| `DASHBOARD_DEFAULT_WINDOW_HOURS` | `24` | No | Dashboard V2 default filter window. |
+| `DASHBOARD_DEFAULT_TARGET_LIMIT` | `200` | No | Default target row limit for `/admin/progress`. |
+| `DASHBOARD_DEFAULT_RECENT_JOB_LIMIT` | `60` | No | Default recent-job limit for `/admin/progress`. |
+| `DASHBOARD_DEFAULT_REFRESH_INTERVAL_SECS` | `5` | No | Default polling interval exposed via `/admin/meta`. |
+| `RUN_NOW_DEDUP_SECS` | `60` | No | Suppression window for `POST /targets/{id}/run`. |
+| `ALLOWED_NUCLEI_TEMPLATES` | `all,http,network,dns,ssl` | No | Allowlist for per-target nuclei template selection. |
 
 ## Scan Intervals
 
@@ -29,6 +42,7 @@ All runtime configuration is environment-variable based.
 | `MAX_NUCLEI_CONCURRENCY` | `1` | nuclei `-c` concurrency |
 | `NUCLEI_PROC_TIMEOUT` | `1800` | nuclei process kill timeout (seconds) |
 | `NUCLEI_THROTTLE_SECS` | `30` | Per-scope throttle between nuclei tasks |
+| `NUCLEI_BATCH_SIZE` | `1` | Max `scan_http` tasks grouped into one nuclei run in code fallback defaults |
 
 ## Active Recon (DNS Brute)
 
@@ -49,6 +63,10 @@ Per-target controls live in SQLite (`targets.active_recon`, `targets.brute_wordl
 | `NUCLEI_TEMPLATES_DIR` | `/templates` | Mounted template directory in container. |
 | `NUCLEI_TEMPLATES_UPDATE_INTERVAL_HOURS` | `24` | Background template refresh interval. |
 | `NUCLEI_SEVERITY_MIN` | `medium` | Minimum severity to scan and notify. |
+| `NUCLEI_RATE_LIMIT` | `10` | Code fallback default; compose stack overrides to `150`. |
+| `NUCLEI_BULK_SIZE` | `25` | Code fallback default; compose stack overrides to `100`. |
+| `NUCLEI_TIMEOUT_SECS` | `15` | Code fallback default; compose stack overrides to `10`. |
+| `NUCLEI_RETRIES` | `1` | Code fallback default; compose stack overrides to `0`. |
 
 ## Notifications
 
@@ -57,6 +75,17 @@ Per-target controls live in SQLite (`targets.active_recon`, `targets.brute_wordl
 | `TELEGRAM_BOT_TOKEN` | empty | Required with `TELEGRAM_CHAT_ID` to enable Telegram. |
 | `TELEGRAM_CHAT_ID` | empty | Telegram destination. |
 | `DISCORD_WEBHOOK_URL` | empty | Enables Discord notifications. |
+
+## VPN / Gluetun
+
+`docker-compose.yml` routes `worker-recon`, `worker-httpx`, and `worker-nuclei`
+through `gluetun` for outbound scanning traffic.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `MULLVAD_WIREGUARD_PRIVATE_KEY` | none | Required for the VPN-backed stack. |
+| `MULLVAD_WIREGUARD_ADDRESSES` | none | Required WireGuard address assignment. |
+| `MULLVAD_SERVER_CITIES` | `Paris` | Compose default for the selected Mullvad city. |
 
 ## Optional Provider Keys
 
@@ -81,6 +110,9 @@ Redis is started with:
 
 Operational implication: with `volatile-lru`, Redis only evicts keys that have TTLs (for example `inflight:*` guards). Queue lists and DLQ lists are not volatile keys and should not be evicted under this policy.
 
+The nuclei worker also uses TTL-backed scope throttle keys with the pattern
+`throttle:nuclei:<scope_root>`.
+
 ## Pi 5 Tuning Baseline
 
 Reasonable defaults for a Raspberry Pi 5:
@@ -88,5 +120,9 @@ Reasonable defaults for a Raspberry Pi 5:
 - Recon/HTTPX/Nuclei intervals: `24/12/24`
 - Concurrency: `2/10/1`
 - Active brute: enabled per target only
+
+The checked-in compose stack is more aggressive for nuclei (`25` concurrency,
+rate-limit `150`, bulk-size `100`, severity floor `high`, and `4` replicas in
+Swarm-style deployments). Treat those as deployment tuning, not conservative Pi defaults.
 
 Raise one limit at a time and watch CPU, memory, and queue depth.

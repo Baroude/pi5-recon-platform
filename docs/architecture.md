@@ -18,6 +18,10 @@ client -> ingestor -> redis queues -> workers
                               |- worker-nuclei
                               |- worker-notify
 
+worker-recon --\
+worker-httpx ---+-> gluetun -> internet
+worker-nuclei --/
+
 worker-dns-brute -> resolver (unbound)
 workers <-> sqlite (/data/db/recon.db)
 workers -> /data/output/* + /logs
@@ -28,12 +32,13 @@ workers -> /data/output/* + /logs
 | Service | Image/Build | Role |
 |---|---|---|
 | `redis` | `redis:7-alpine` | Queue broker + dedup key store. Configured with AOF, `maxmemory 512mb`, `volatile-lru`. |
+| `gluetun` | `qmcgaw/gluetun:v3` | VPN gateway for outbound traffic from `worker-recon`, `worker-httpx`, and `worker-nuclei`. |
 | `ingestor` | `ingestor/` | FastAPI API + periodic refresh scheduler + dashboard endpoints. |
-| `worker-recon` | `workers/recon/` | Passive subdomain discovery (subfinder + amass passive), enqueues `probe_host`, optionally enqueues `brute_domain`. |
+| `worker-recon` | `workers/recon/` | Passive subdomain discovery (subfinder + amass passive), enqueues `probe_host`, optionally enqueues `brute_domain`, and egresses through `gluetun`. |
 | `resolver` | `klutchell/unbound:1.19.3` | Internal recursive DNS resolver used by `worker-dns-brute`. |
 | `worker-dns-brute` | `workers/dns_brute/` | Active DNS brute force + permutations (shuffledns/alterx/dnsx), enqueues `probe_host`. |
-| `worker-httpx` | `workers/httpx_worker/` | Probes hostnames with httpx, upserts endpoints, enqueues `scan_http`. |
-| `worker-nuclei` | `workers/nuclei/` | Scans endpoints with nuclei, deduplicates findings, enqueues `notify_finding`. |
+| `worker-httpx` | `workers/httpx_worker/` | Probes hostnames with httpx, upserts endpoints, enqueues `scan_http`, and egresses through `gluetun`. |
+| `worker-nuclei` | `workers/nuclei/` | Scans endpoints with nuclei, deduplicates findings, enqueues `notify_finding`, honors per-target template selection, and egresses through `gluetun`. |
 | `worker-notify` | `workers/notify/` | Sends notifications to Telegram/Discord, records delivery rows. |
 
 ## Queue Pipeline
@@ -92,12 +97,14 @@ Key format:
 inflight:<queue>:<dedup_key>
 ```
 
-Examples:
+Current examples:
 
 - `inflight:recon_domain:example.com`
+- `inflight:recon_domain:manual:example.com`
 - `inflight:brute_domain:brute:example.com`
-- `inflight:probe_host:api.example.com`
-- `inflight:scan_http:https://api.example.com`
+
+`probe_host` and `scan_http` rely on SQLite freshness checks rather than Redis
+inflight guards in the current implementation.
 
 ## Persistence
 
@@ -112,3 +119,5 @@ Examples:
 
 Only `ingestor` publishes a host port (`8090:8090`).
 All other services communicate only inside `recon-net`.
+Outbound traffic for `worker-recon`, `worker-httpx`, and `worker-nuclei` is
+routed via `gluetun` because those services use `network_mode: service:gluetun`.

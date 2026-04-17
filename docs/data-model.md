@@ -22,6 +22,7 @@ WAL mode and foreign keys are enabled on each connection.
 | `notes` | TEXT | optional |
 | `active_recon` | BOOLEAN NOT NULL default `0` | enable `brute_domain` branch |
 | `brute_wordlist` | TEXT NOT NULL default `'dns-small.txt'` | selected wordlist filename |
+| `nuclei_template` | TEXT NOT NULL default `'all'` | per-target nuclei template path/selector |
 
 ### `jobs`
 
@@ -102,9 +103,11 @@ inflight:<queue>:<dedup_key>
 Current usages:
 
 - `inflight:recon_domain:<domain>`
+- `inflight:recon_domain:manual:<domain>`
 - `inflight:brute_domain:brute:<domain>`
-- `inflight:probe_host:<hostname>`
-- `inflight:scan_http:<url>`
+
+`probe_host` and `scan_http` currently depend on database freshness checks
+instead of Redis inflight guards.
 
 ## Retry Semantics
 

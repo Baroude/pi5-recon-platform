@@ -42,6 +42,12 @@ Use either:
 
 Start from `.env.example`.
 
+If you keep the VPN-backed stack from `docker-compose.yml`, also provide:
+
+- `MULLVAD_WIREGUARD_PRIVATE_KEY`
+- `MULLVAD_WIREGUARD_ADDRESSES`
+- optionally `MULLVAD_SERVER_CITIES`
+
 ## 3. Deploy
 
 ### Portainer
@@ -64,9 +70,10 @@ docker compose -p recon-platform -f docker-compose.yml ps
 curl http://<pi-ip>:8090/health
 ```
 
-Expected services (8 total):
+Expected services (9 declared services):
 
 - `redis`
+- `gluetun`
 - `ingestor`
 - `worker-recon`
 - `resolver`
@@ -75,7 +82,13 @@ Expected services (8 total):
 - `worker-nuclei`
 - `worker-notify`
 
-`resolver` should be `healthy`.
+`resolver` and `gluetun` should be `healthy`.
+
+Notes:
+
+- `docker-compose.yml` declares `worker-nuclei` with `deploy.replicas: 4`, which
+  is honored in Swarm-style/Portainer stack deployments.
+- Plain `docker compose up` may ignore `deploy.replicas`; scale explicitly if needed.
 
 ## 5. Smoke Test
 
@@ -97,6 +110,13 @@ docker compose -p recon-platform -f docker-compose.yml logs -f worker-recon work
 
 ```bash
 docker compose -p recon-platform -f docker-compose.yml restart worker-recon worker-dns-brute worker-httpx worker-nuclei worker-notify resolver
+```
+
+If `gluetun` is part of your deployment, include it when restarting the outbound
+scanning path:
+
+```bash
+docker compose -p recon-platform -f docker-compose.yml restart gluetun worker-recon worker-httpx worker-nuclei
 ```
 
 ### Rebuild and redeploy
@@ -136,5 +156,7 @@ tail -f /opt/recon-platform/logs/worker-nuclei.log
   - `/opt/recon-platform/config/unbound/root.hints` exists and is a file
   - compose uses `klutchell/unbound:1.19.3`
   - mount path maps root hints to `/etc/unbound/named.cache`
+- If `gluetun` is unhealthy, verify the Mullvad WireGuard variables are present
+  and `/dev/net/tun` is available on the host.
 - If active recon does not run, verify target has `active_recon=true`.
 - If brute worker starts but resolves nothing, verify wordlist file exists under `/opt/recon-platform/wordlists`.

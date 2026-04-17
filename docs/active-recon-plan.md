@@ -36,6 +36,9 @@ API supports:
 - `POST /targets` with `active_recon`, `brute_wordlist`
 - `PATCH /targets/{target_id}` to update these fields
 
+These controls are independent from `targets.nuclei_template`, which affects the
+HTTP scanning branch rather than `brute_domain`.
+
 ## Runtime Flow
 
 1. `worker-recon` completes passive discovery.

@@ -89,14 +89,21 @@ def client(app_ctx):
         yield test_client, ingestor_app, fake_redis, enqueued
 
 
-def _insert_target(ingestor_app, scope_root="example.com", enabled=1, active_recon=0, wordlist="dns-small.txt"):
+def _insert_target(
+    ingestor_app,
+    scope_root="example.com",
+    enabled=1,
+    active_recon=0,
+    wordlist="dns-small.txt",
+    nuclei_template="all",
+):
     with ingestor_app.db_conn() as conn:
         return conn.execute(
             """
-            INSERT INTO targets (scope_root, enabled, notes, active_recon, brute_wordlist)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO targets (scope_root, enabled, notes, active_recon, brute_wordlist, nuclei_template)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (scope_root, enabled, "note", active_recon, wordlist),
+            (scope_root, enabled, "note", active_recon, wordlist, nuclei_template),
         ).lastrowid
 
 
@@ -139,6 +146,8 @@ def test_admin_meta_returns_expected_keys(client):
 
     assert "allowed_wordlists" in body
     assert set(body["allowed_wordlists"]) == {"dns-small.txt", "dns-medium.txt", "dns-large.txt"}
+    assert "allowed_nuclei_templates" in body
+    assert set(body["allowed_nuclei_templates"]) == {"all", "dns", "http", "network", "ssl"}
     assert "defaults" in body
     assert "bounds" in body
     assert "recon_interval_hours" in body
@@ -158,6 +167,7 @@ def test_progress_contains_target_schedule_and_throughput_fields(client):
         enabled=1,
         active_recon=1,
         wordlist="dns-medium.txt",
+        nuclei_template="http",
     )
 
     with ingestor_app.db_conn() as conn:
@@ -192,10 +202,43 @@ def test_progress_contains_target_schedule_and_throughput_fields(client):
     target = next(t for t in body["targets"] if t["scope_root"] == "sched.example.com")
     assert target["active_recon"] == 1
     assert target["brute_wordlist"] == "dns-medium.txt"
+    assert target["nuclei_template"] == "http"
     assert "next_recon_due_at" in target
     assert "next_recon_in_secs" in target
     assert "is_recon_overdue" in target
     assert isinstance(target["next_recon_in_secs"], int)
+
+
+def test_target_create_update_and_list_include_nuclei_template(client):
+    test_client, _, _, enqueued = client
+
+    create_res = test_client.post(
+        "/targets",
+        json={
+            "scope_root": "templated.example.com",
+            "active_recon": True,
+            "brute_wordlist": "dns-large.txt",
+            "nuclei_template": "ssl",
+        },
+    )
+    assert create_res.status_code == 201
+    created = create_res.json()
+    assert created["nuclei_template"] == "ssl"
+    assert enqueued[-1]["queue"] == "recon_domain"
+    assert enqueued[-1]["payload"] == {"domain": "templated.example.com"}
+
+    target_id = created["id"]
+    patch_res = test_client.patch(
+        f"/targets/{target_id}",
+        json={"nuclei_template": "dns"},
+    )
+    assert patch_res.status_code == 200
+    assert patch_res.json()["nuclei_template"] == "dns"
+
+    list_res = test_client.get("/targets")
+    assert list_res.status_code == 200
+    row = next(t for t in list_res.json() if t["id"] == target_id)
+    assert row["nuclei_template"] == "dns"
 
 
 def test_findings_supports_severity_target_and_window_filters(client):

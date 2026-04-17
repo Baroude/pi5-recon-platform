@@ -23,7 +23,8 @@ Request body:
   "scope_root": "example.com",
   "notes": "bug bounty program",
   "active_recon": true,
-  "brute_wordlist": "dns-medium.txt"
+  "brute_wordlist": "dns-medium.txt",
+  "nuclei_template": "http"
 }
 ```
 
@@ -33,6 +34,9 @@ Request body:
 - `dns-medium.txt`
 - `dns-large.txt`
 
+`nuclei_template` must be one of the values returned by `GET /admin/meta`
+under `allowed_nuclei_templates`. The default is `all`.
+
 Response (`201`):
 
 ```json
@@ -41,7 +45,8 @@ Response (`201`):
   "scope_root": "example.com",
   "queued": true,
   "active_recon": true,
-  "brute_wordlist": "dns-medium.txt"
+  "brute_wordlist": "dns-medium.txt",
+  "nuclei_template": "http"
 }
 ```
 
@@ -57,6 +62,7 @@ Request body supports:
 
 - `active_recon` (bool)
 - `brute_wordlist` (allowed values above)
+- `nuclei_template` (allowed values from `GET /admin/meta`)
 
 ### POST `/targets/{target_id}/run`
 
@@ -102,6 +108,7 @@ Response shape:
 ```json
 {
   "allowed_wordlists": ["dns-large.txt", "dns-medium.txt", "dns-small.txt"],
+  "allowed_nuclei_templates": ["all", "dns", "http", "network", "ssl"],
   "recon_interval_hours": 24.0,
   "defaults": {
     "window_hours": 24,
@@ -139,6 +146,7 @@ Includes:
 - `targets` with config + scheduling fields:
   - `active_recon`
   - `brute_wordlist`
+  - `nuclei_template`
   - `next_recon_due_at`
   - `next_recon_in_secs`
   - `is_recon_overdue`
@@ -178,6 +186,18 @@ Query:
 - `limit` (default `50`, max `500`)
 
 Response rows include `scope_root` for target-scoped UI filtering.
+
+### GET `/findings/{finding_id}`
+
+Return the full persisted finding plus a best-effort raw nuclei event loaded from
+the associated JSONL artifact under `OUTPUT_DIR`.
+
+Response includes:
+
+- finding fields such as `template_id`, `severity`, `title`, `matched_at`
+- endpoint/target context such as `url`, `host`, `hostname`, `target_id`, `scope_root`
+- `raw_event` when a matching JSONL event can be found
+- `raw_event_error` when the raw artifact is missing, outside `OUTPUT_DIR`, or has no exact match
 
 ### GET `/subdomains`
 

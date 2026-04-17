@@ -28,6 +28,7 @@ Active DNS brute force is implemented, but gated:
 - disabled by default per target (`active_recon=false`)
 - enabled explicitly via API (`PATCH /targets/{target_id}` or `POST /targets`)
 - wordlist must be from allowlist (`dns-small.txt`, `dns-medium.txt`, `dns-large.txt`)
+- nuclei template selection is allowlisted via `ALLOWED_NUCLEI_TEMPLATES`
 
 `worker-dns-brute` also does wildcard detection to avoid noisy expansion.
 
@@ -46,6 +47,7 @@ No SQL string interpolation with user input.
 
 - Internal communication only on `recon-net`
 - Redis and resolver are not host-exposed
+- outbound traffic for `worker-recon`, `worker-httpx`, and `worker-nuclei` can be forced through `gluetun`
 - Only ingestor exposes host port `8090`
 
 API has no auth in v1. Restrict access at network edge (firewall/VPN/reverse proxy).
@@ -71,3 +73,4 @@ Expected egress destinations:
 - Queue growth: monitor `LLEN` and DLQ depth
 - Notification rate limits: notify worker re-enqueues on HTTP 429 with retry-after sleep
 - Resolver health: monitor `resolver` healthcheck and root-hints file integrity
+- Raw finding detail loading is constrained to files under `OUTPUT_DIR` before any artifact is read
