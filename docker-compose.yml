@@ -7,8 +7,6 @@
 
 x-worker-defaults: &worker-defaults
   restart: unless-stopped
-  networks:
-    - recon-net
   depends_on:
     redis:
       condition: service_healthy
@@ -52,6 +50,41 @@ services:
         max-file: "3"
 
   # --------------------------------------------------------------------------
+  # Gluetun — Mullvad WireGuard VPN gateway
+  # Scanning workers route all outbound traffic through this container.
+  # Kill switch: if VPN drops, gluetun's firewall blocks all worker traffic.
+  # --------------------------------------------------------------------------
+  gluetun:
+    image: qmcgaw/gluetun:v3
+    platform: linux/arm64
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      - recon-net
+    environment:
+      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${MULLVAD_WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=${MULLVAD_WIREGUARD_ADDRESSES}
+      - SERVER_COUNTRIES=France
+      - SERVER_CITIES=${MULLVAD_SERVER_CITIES:-Paris}
+      - FIREWALL_OUTBOUND_SUBNETS=172.16.0.0/12
+    healthcheck:
+      test: ["CMD", "/gluetun/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --------------------------------------------------------------------------
   # Ingestor — REST API for target submission + periodic refresh scheduler
   # --------------------------------------------------------------------------
   ingestor:
@@ -62,6 +95,8 @@ services:
       args:
         CACHE_BUST: ${CACHE_BUST:-1}
     platform: linux/arm64
+    networks:
+      - recon-net
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
@@ -83,6 +118,12 @@ services:
       args:
         CACHE_BUST: ${CACHE_BUST:-1}
     platform: linux/arm64
+    network_mode: "service:gluetun"
+    depends_on:
+      redis:
+        condition: service_healthy
+      gluetun:
+        condition: service_healthy
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
@@ -113,6 +154,12 @@ services:
       args:
         CACHE_BUST: ${CACHE_BUST:-1}
     platform: linux/arm64
+    network_mode: "service:gluetun"
+    depends_on:
+      redis:
+        condition: service_healthy
+      gluetun:
+        condition: service_healthy
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
@@ -136,6 +183,12 @@ services:
       args:
         CACHE_BUST: ${CACHE_BUST:-1}
     platform: linux/arm64
+    network_mode: "service:gluetun"
+    depends_on:
+      redis:
+        condition: service_healthy
+      gluetun:
+        condition: service_healthy
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
@@ -194,6 +247,8 @@ services:
       args:
         CACHE_BUST: ${CACHE_BUST:-1}
     platform: linux/arm64
+    networks:
+      - recon-net
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
@@ -227,6 +282,8 @@ services:
       args:
         CACHE_BUST: ${CACHE_BUST:-1}
     platform: linux/arm64
+    networks:
+      - recon-net
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
