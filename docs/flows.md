@@ -85,22 +85,24 @@ Client                ingestor          Redis            worker-recon
 3. Query `targets` table: confirm a row with `scope_root = domain` and `enabled = 1` exists. If not, ack and skip.
 4. **TTL check:** query `jobs` for the most recent successful `recon_domain` job for this domain. If the last run finished within `DEFAULT_RECON_INTERVAL_HOURS`, ack and skip (work is fresh).
 5. Insert a `jobs` row with `status = 'running'`, `started_at = now()`, `worker_name = 'worker-recon'`.
-6. Run **subfinder**:
-   - Command: `subfinder -d <domain> -o <output_file> -silent -all -t <MAX_RECON_CONCURRENCY> -timeout 30`
-   - Output file: `/data/output/recon/<domain>-subfinder-<timestamp>.txt`
-   - Parse output: one hostname per line. Return `[]` on timeout or missing file.
-7. Run **amass** (passive):
-   - Command: `amass enum -passive -d <domain> -o <output_file> -silent -timeout 10`
-   - Output file: `/data/output/recon/<domain>-amass-<timestamp>.txt`
-   - Gracefully skipped if binary is absent.
-8. Merge and deduplicate results from both tools.
-9. Filter: keep only hostnames that equal `domain` or are subdomains of `domain` (using `is_in_scope()`). Wildcard prefixes (`*.`) are stripped before comparison.
-10. For each in-scope hostname:
-    - `INSERT OR IGNORE INTO subdomains (target_id, hostname, source)` + `UPDATE last_seen`
-    - Enqueue `probe_host` with dedup key = hostname, TTL = `DEFAULT_HTTPX_INTERVAL_HOURS × 3600 s`
-    - Enqueue `notify_finding` with `notification_type = new_subdomain`
-11. Update `jobs` row: `status = 'done'`, `finished_at = now()`, `raw_output_path = <subfinder_output_file>`.
-12. `ack_task`: remove task from `recon_domain:processing`.
+6. Launch **subfinder** and **amass** concurrently in background threads:
+   - **subfinder:** `subfinder -d <domain> -silent -all -t <MAX_RECON_CONCURRENCY> -timeout 30`
+   - **amass:** `amass enum -passive -d <domain> -silent -timeout <AMASS_TIMEOUT_MINUTES>`
+   - Both use `Popen` with stdout piped. Each thread reads stdout line-by-line, writes to its output file, and pushes hostnames into a shared in-process queue.
+   - Process-level kill timeout: `SUBFINDER_PROC_TIMEOUT` (660 s) and `AMASS_PROC_TIMEOUT` (`AMASS_TIMEOUT_MINUTES × 60 + 60` s).
+   - Amass is gracefully skipped if binary is absent.
+7. **Main loop** drains the shared queue while both threads are alive:
+   - For each hostname received from either tool:
+     - Filter: skip if not in scope (using `is_in_scope()`). Wildcard prefixes (`*.`) are stripped before comparison.
+     - Skip if already seen in this run (dedup across tools).
+     - `INSERT OR IGNORE INTO subdomains (target_id, hostname, source)` + `UPDATE last_seen`
+     - If new: enqueue `probe_host` immediately (no waiting for the other tool to finish).
+     - If new: enqueue `notify_finding` with `notification_type = new_subdomain`.
+8. Wait for both threads to finish.
+9. Update `jobs` row: `status = 'done'`, `finished_at = now()`, `raw_output_path = <subfinder_output_file>`.
+10. `ack_task`: remove task from `recon_domain:processing`.
+
+**Key behavior:** `probe_host` tasks are enqueued as each hostname is discovered — not after both tools finish. httpx can start probing the first subdomain while subfinder and amass are still running.
 
 ---
 
@@ -148,17 +150,21 @@ Client                ingestor          Redis            worker-recon
 3. **TTL check:** query `jobs` for last successful `scan_http` for this URL. If within `DEFAULT_NUCLEI_INTERVAL_HOURS`, skip.
 4. Insert `jobs` row `status = 'running'`.
 5. Build severity filter: starting from `NUCLEI_SEVERITY_MIN` (default `medium`), include that severity and all higher ones. Example: `medium` → `["medium","high","critical"]`.
-6. Run **nuclei**:
-   - Command: `nuclei -u <url> -t <NUCLEI_TEMPLATES_DIR> -severity <comma-joined-severities> -jsonl -o <output_file> -silent -rate-limit 10 -bulk-size 25 -c <MAX_NUCLEI_CONCURRENCY> -timeout 15`
-   - Output file: `/data/output/nuclei/<hostname>-<timestamp>.jsonl`
-   - Parse JSONL: each line has `template-id`, `info.severity`, `info.name`, `matched-at`.
-7. For each finding:
-   - Compute `dedupe_key = sha1(template_id + "|" + url)`.
+6. Run **nuclei** with `Popen`, streaming stdout line-by-line:
+   - Command: `nuclei -u <url> -t <NUCLEI_TEMPLATES_DIR> -severity <comma-joined-severities> -jsonl -silent -no-color -rate-limit 10 -bulk-size 25 -c <MAX_NUCLEI_CONCURRENCY> -timeout 15 -retries 1`
+   - Output file: `/data/output/nuclei/<hostname>-<timestamp>.jsonl` — written as lines arrive.
+   - Process-level kill timeout: `NUCLEI_PROC_TIMEOUT` (default 1800 s).
+   - Each JSONL line is parsed and processed immediately as nuclei outputs it (no wait for scan completion).
+7. For each finding received from the stream:
+   - Compute `dedupe_key = sha1(template_id + "|" + matched_at)`.
    - Look up `findings` by `dedupe_key`:
      - **Exists:** update `last_seen`. Do **not** re-notify.
-     - **Does not exist:** insert new row, then check `severity_meets_threshold()`. If severity >= `NUCLEI_SEVERITY_MIN`, enqueue `notify_finding` with `notification_type = new_finding`.
-8. Update `jobs` row: `status = 'done'`, `finished_at = now()`.
-9. `ack_task`.
+     - **Does not exist:** insert new row, then check `severity_meets_threshold()`. If severity >= `NUCLEI_SEVERITY_MIN`, enqueue `notify_finding` with `notification_type = new_finding` **immediately**.
+8. Wait for nuclei process to exit (or kill on timeout).
+9. Update `endpoints.last_scanned_at` and `jobs` row: `status = 'done'`, `finished_at = now()`.
+10. `ack_task`.
+
+**Key behavior:** `notify_finding` is enqueued as soon as each finding is detected — not after the full scan completes. A critical finding found at minute 2 of a 30-minute scan notifies within seconds.
 
 **Template updater (background thread):**
 

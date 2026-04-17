@@ -200,12 +200,11 @@ Redis is used for speed and simplicity. Persistent results shall not rely only o
 - Amass (ARM64 binary required — use `ghcr.io/owasp-amass/amass` with explicit `linux/arm64` platform tag)
 
 **Responsibilities:**
-- Run passive subdomain discovery first
-- Optionally run Amass in passive or carefully limited mode
-- Normalize output
-- Deduplicate results against storage
+- Run subfinder and amass concurrently in background threads, streaming stdout line-by-line
+- Enqueue `probe_host` for each new in-scope hostname as it is discovered — without waiting for either tool to finish
+- Deduplicate discovered hostnames across tools within a single run
 - Filter discovered hostnames against the authorized scope before enqueuing (see section 7.6)
-- Enqueue HTTP probing for new in-scope hosts
+- Gracefully handle amass binary absence
 
 **Inputs:**
 - `recon_domain(domain)`
@@ -253,10 +252,10 @@ Redis is used for speed and simplicity. Persistent results shall not rely only o
 - Nuclei (ARM64 binary required — use `ghcr.io/projectdiscovery/nuclei` with explicit `linux/arm64` platform tag)
 
 **Responsibilities:**
-- Scan URLs using curated templates
-- Record findings with severity and template metadata
+- Scan URLs using curated templates, streaming JSONL output line-by-line via `Popen`
+- Persist each finding and enqueue `notify_finding` immediately as nuclei outputs it — not after the full scan completes
 - Deduplicate repeat findings
-- Trigger alerts only for newly observed findings or severity changes
+- Trigger alerts only for newly observed findings that meet the severity threshold
 
 **Inputs:**
 - `scan_http(url)`
@@ -575,7 +574,9 @@ Expected environment variables or config keys:
 - `MAX_RECON_CONCURRENCY`
 - `MAX_HTTPX_CONCURRENCY`
 - `MAX_NUCLEI_CONCURRENCY`
+- `AMASS_TIMEOUT_MINUTES`
 - `NUCLEI_SEVERITY_MIN`
+- `NUCLEI_PROC_TIMEOUT`
 - `TELEGRAM_BOT_TOKEN` (optional)
 - `TELEGRAM_CHAT_ID` (optional)
 - `DISCORD_WEBHOOK_URL` (optional)

@@ -35,6 +35,12 @@ All configuration is injected via environment variables. There are no configurat
 | `DEFAULT_HTTPX_INTERVAL_HOURS` | `12` | No | Minimum hours between HTTP re-probes per hostname. Controls both the Redis inflight TTL and the worker's own TTL check before running httpx. |
 | `DEFAULT_NUCLEI_INTERVAL_HOURS` | `24` | No | Minimum hours between nuclei rescans per endpoint URL. Controls both the Redis inflight TTL and the worker's own TTL check before running nuclei. |
 
+### Recon Worker
+
+| Variable | Default | Required | Effect |
+|---|---|---|---|
+| `AMASS_TIMEOUT_MINUTES` | `20` | No | Passed as `-timeout` (in minutes) to amass. The process-level kill timeout is this value × 60 + 60 seconds. Increase if amass consistently times out on large domains. |
+
 ### Nuclei
 
 | Variable | Default | Required | Effect |
@@ -42,6 +48,7 @@ All configuration is injected via environment variables. There are no configurat
 | `NUCLEI_TEMPLATES_DIR` | `/templates` | No | Path inside the nuclei container where templates are stored. Matches the bind mount at `/opt/recon-platform/nuclei-templates`. |
 | `NUCLEI_TEMPLATES_UPDATE_INTERVAL_HOURS` | `24` | No | How often the background thread inside `worker-nuclei` runs `nuclei -update-templates`. Does not affect the template update that runs at container startup via `entrypoint.sh`. |
 | `NUCLEI_SEVERITY_MIN` | `medium` | No | Minimum finding severity that triggers a notification. Also used as the floor for the `-severity` flag passed to nuclei — templates below this threshold are not run at all, saving scan time. Accepted values: `info`, `low`, `medium`, `high`, `critical`. |
+| `NUCLEI_PROC_TIMEOUT` | `1800` | No | Process-level kill timeout in seconds for a single nuclei scan. Nuclei is killed and the task marked done if this is exceeded. Increase only for very large template sets. |
 
 **Severity threshold behavior:** Both the nuclei worker and the notify worker apply `severity_meets_threshold()`. The nuclei worker uses it to filter which templates to run. The notify worker uses it again as a final check before dispatching — a safeguard in case a task was enqueued before the threshold was raised.
 

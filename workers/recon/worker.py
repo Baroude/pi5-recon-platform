@@ -10,17 +10,18 @@ Workflow
 1. Dequeue task (BLMOVE into processing list).
 2. Validate target exists and is enabled.
 3. TTL check — skip if already scanned within DEFAULT_RECON_INTERVAL_HOURS.
-4. Run subfinder (passive, with optional provider keys).
-5. Filter results against scope_root before touching the DB.
-6. Upsert subdomains; enqueue probe_host for new ones.
-7. Ack task.  On error: nack (retry ×2) or DLQ.
+4. Run subfinder and amass concurrently, streaming stdout line-by-line.
+5. Enqueue probe_host for each new in-scope hostname as it is discovered.
+6. Ack task.  On error: nack (retry ×2) or DLQ.
 """
 
 import json
 import logging
 import os
+import queue as thread_queue
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 
@@ -44,10 +45,14 @@ PROCESSING  = "recon_domain:processing"
 NEXT_QUEUE  = "probe_host"
 WORKER_NAME = "worker-recon"
 
-MAX_RETRIES          = int(os.environ.get("MAX_RETRIES", 2))
-RECON_INTERVAL_HOURS = float(os.environ.get("DEFAULT_RECON_INTERVAL_HOURS", 24))
-MAX_CONCURRENCY      = int(os.environ.get("MAX_RECON_CONCURRENCY", 2))
-OUTPUT_DIR           = os.environ.get("OUTPUT_DIR", "/data/output")
+MAX_RETRIES           = int(os.environ.get("MAX_RETRIES", 2))
+RECON_INTERVAL_HOURS  = float(os.environ.get("DEFAULT_RECON_INTERVAL_HOURS", 24))
+MAX_CONCURRENCY       = int(os.environ.get("MAX_RECON_CONCURRENCY", 2))
+OUTPUT_DIR            = os.environ.get("OUTPUT_DIR", "/data/output")
+AMASS_TIMEOUT_MINUTES = int(os.environ.get("AMASS_TIMEOUT_MINUTES", 20))
+# Process-level kill timeout: tool's own timeout + 60 s grace period.
+SUBFINDER_PROC_TIMEOUT = 660   # subfinder -timeout is in seconds; 10 min tool + 60 s
+AMASS_PROC_TIMEOUT     = AMASS_TIMEOUT_MINUTES * 60 + 60
 
 logging.basicConfig(
     level=logging.INFO,
@@ -68,60 +73,39 @@ def is_in_scope(hostname: str, scope_root: str) -> bool:
     return h == s or h.endswith(f".{s}")
 
 
-def run_subfinder(domain: str, output_file: str) -> list:
-    cmd = [
-        "subfinder",
-        "-d", domain,
-        "-o", output_file,
-        "-silent",
-        "-all",
-        "-t", str(MAX_CONCURRENCY),
-        "-timeout", "30",
-    ]
-    logger.info("subfinder: %s", domain)
+def _stream_into_queue(
+    cmd: list,
+    tool_name: str,
+    output_file: str,
+    out_q: thread_queue.Queue,
+    proc_timeout: int,
+) -> None:
+    """
+    Run cmd in a subprocess, push (hostname, tool_name) into out_q for every
+    non-empty stdout line, then push (None, tool_name) as the done sentinel.
+    Writes the same lines to output_file for raw storage.
+    """
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if proc.returncode not in (0, 1):   # 1 = no results, still ok
-            logger.warning("subfinder stderr for %s: %s", domain, proc.stderr[:500])
-    except subprocess.TimeoutExpired:
-        logger.error("subfinder timed out for %s", domain)
-        return []
-
-    if not os.path.exists(output_file):
-        return []
-
-    with open(output_file) as fh:
-        return [line.strip() for line in fh if line.strip()]
-
-
-def run_amass_passive(domain: str, output_file: str) -> list:
-    """Run amass in passive-only mode; return list of discovered hostnames."""
-    cmd = [
-        "amass",
-        "enum",
-        "-passive",
-        "-d", domain,
-        "-o", output_file,
-        "-silent",
-        "-timeout", "10",   # minutes
-    ]
-    logger.info("amass passive: %s", domain)
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=660)
-        if proc.returncode not in (0, 1):
-            logger.warning("amass stderr for %s: %s", domain, proc.stderr[:500])
-    except subprocess.TimeoutExpired:
-        logger.error("amass timed out for %s", domain)
-        return []
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        with open(output_file, "w") as fh:
+            for line in proc.stdout:
+                hostname = line.strip()
+                if hostname:
+                    fh.write(hostname + "\n")
+                    out_q.put((hostname, tool_name))
+        try:
+            proc.wait(timeout=proc_timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            logger.error("%s process timeout exceeded — killed", tool_name)
     except FileNotFoundError:
-        logger.warning("amass binary not found — skipping")
-        return []
-
-    if not os.path.exists(output_file):
-        return []
-
-    with open(output_file) as fh:
-        return [line.strip() for line in fh if line.strip()]
+        logger.warning("%s binary not found — skipping", tool_name)
+    except Exception as exc:
+        logger.error("%s unexpected error: %s", tool_name, exc)
+    finally:
+        out_q.put((None, tool_name))
 
 
 def process_task(r: redis_lib.Redis, task: dict) -> None:
@@ -144,7 +128,6 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
         target_id  = row["id"]
         scope_root = row["scope_root"]
 
-        # TTL check
         stale_threshold = f"-{RECON_INTERVAL_HOURS}"
         recent = conn.execute(
             """SELECT finished_at FROM jobs
@@ -166,47 +149,73 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
     out_dir = os.path.join(OUTPUT_DIR, "recon", domain)
     os.makedirs(out_dir, exist_ok=True)
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-    output_file = os.path.join(out_dir, f"subfinder_{ts}.txt")
-    amass_output_file = os.path.join(out_dir, f"amass_{ts}.txt")
+    subfinder_file = os.path.join(out_dir, f"subfinder_{ts}.txt")
+    amass_file     = os.path.join(out_dir, f"amass_{ts}.txt")
+
+    subfinder_cmd = [
+        "subfinder",
+        "-d", domain,
+        "-silent",
+        "-all",
+        "-t", str(MAX_CONCURRENCY),
+        "-timeout", "30",
+    ]
+    amass_cmd = [
+        "amass", "enum",
+        "-passive",
+        "-d", domain,
+        "-silent",
+        "-timeout", str(AMASS_TIMEOUT_MINUTES),
+    ]
+
+    out_q: thread_queue.Queue = thread_queue.Queue()
+    threads = [
+        threading.Thread(
+            target=_stream_into_queue,
+            args=(subfinder_cmd, "subfinder", subfinder_file, out_q, SUBFINDER_PROC_TIMEOUT),
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_stream_into_queue,
+            args=(amass_cmd, "amass", amass_file, out_q, AMASS_PROC_TIMEOUT),
+            daemon=True,
+        ),
+    ]
 
     try:
-        subfinder_found = run_subfinder(domain, output_file)
-        amass_found     = run_amass_passive(domain, amass_output_file)
+        for t in threads:
+            t.start()
 
-        # Build source map so each subdomain is attributed to the right tool(s).
-        source_map: dict[str, set[str]] = {}
-        for h in subfinder_found:
-            if h:
-                source_map.setdefault(h, set()).add("subfinder")
-        for h in amass_found:
-            if h:
-                source_map.setdefault(h, set()).add("amass")
-        found = list(source_map.keys())
-
-        logger.info(
-            "recon found %d hosts for %s (subfinder=%d, amass=%d)",
-            len(found), domain, len(subfinder_found), len(amass_found),
-        )
-
+        seen: set = set()
         new_count = 0
-        with db_conn() as conn:
-            for hostname in found:
-                if not is_in_scope(hostname, scope_root):
-                    logger.debug("Out of scope, skipped: %s", hostname)
-                    continue
+        subfinder_count = 0
+        amass_count = 0
+        tools_done = 0
 
+        while tools_done < 2:
+            hostname, tool_name = out_q.get()
+            if hostname is None:
+                tools_done += 1
+                logger.info("%s finished for %s", tool_name, domain)
+                continue
+
+            if tool_name == "subfinder":
+                subfinder_count += 1
+            else:
+                amass_count += 1
+
+            if not is_in_scope(hostname, scope_root):
+                logger.debug("Out of scope, skipped: %s", hostname)
+                continue
+            if hostname in seen:
+                continue
+            seen.add(hostname)
+
+            with db_conn() as conn:
                 existing = conn.execute(
                     "SELECT id FROM subdomains WHERE target_id = ? AND hostname = ?",
                     (target_id, hostname),
                 ).fetchone()
-
-                tools = source_map.get(hostname, {"subfinder"})
-                if "subfinder" in tools and "amass" in tools:
-                    source = "subfinder,amass"
-                elif "amass" in tools:
-                    source = "amass"
-                else:
-                    source = "subfinder"
 
                 if existing:
                     conn.execute(
@@ -216,7 +225,7 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                 else:
                     conn.execute(
                         "INSERT INTO subdomains (target_id, hostname, source) VALUES (?, ?, ?)",
-                        (target_id, hostname, source),
+                        (target_id, hostname, tool_name),
                     )
                     new_count += 1
                     enqueue(r, NEXT_QUEUE, {
@@ -224,21 +233,27 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
                         "target_id":  target_id,
                         "scope_root": scope_root,
                     })
-                    # Notify on new subdomain discovery
                     enqueue(r, "notify_finding", {
                         "notification_type": "new_subdomain",
                         "hostname":   hostname,
                         "scope_root": scope_root,
                     })
 
+        for t in threads:
+            t.join()
+
+        logger.info(
+            "Recon done for %s: %d new subdomains (subfinder=%d, amass=%d)",
+            domain, new_count, subfinder_count, amass_count,
+        )
+
+        with db_conn() as conn:
             conn.execute(
                 """UPDATE jobs
                    SET status = 'done', finished_at = datetime('now'), raw_output_path = ?
                    WHERE id = ?""",
-                (output_file, job_id),
+                (subfinder_file, job_id),
             )
-
-        logger.info("Recon done for %s: %d new subdomains", domain, new_count)
 
     except Exception:
         with db_conn() as conn:

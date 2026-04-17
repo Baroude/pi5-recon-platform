@@ -11,9 +11,9 @@ Workflow
 1. Dequeue scan_http task.
 2. TTL check — skip recently scanned URLs.
 3. Run nuclei with curated severity filter and templates dir.
-4. Parse JSONL output; deduplicate findings on (template_id, matched_at).
-5. Enqueue notify_finding for new findings that meet severity threshold.
-6. Ack task.
+4. Stream JSONL output line-by-line; deduplicate and persist each finding
+   immediately so notify_finding is enqueued as soon as nuclei fires.
+5. Ack task.
 
 A background thread re-runs `nuclei -update-templates` on the configured
 interval so templates stay current without a container restart.
@@ -46,10 +46,10 @@ from common.queue import (
 from common.scope import is_in_scope
 
 # ---------------------------------------------------------------------------
-QUEUE       = "scan_http"
-PROCESSING  = "scan_http:processing"
+QUEUE        = "scan_http"
+PROCESSING   = "scan_http:processing"
 NOTIFY_QUEUE = "notify_finding"
-WORKER_NAME = "worker-nuclei"
+WORKER_NAME  = "worker-nuclei"
 
 MAX_RETRIES           = int(os.environ.get("MAX_RETRIES", 2))
 NUCLEI_INTERVAL_HOURS = float(os.environ.get("DEFAULT_NUCLEI_INTERVAL_HOURS", 24))
@@ -59,6 +59,7 @@ MAX_CONCURRENCY       = int(os.environ.get("MAX_NUCLEI_CONCURRENCY", 1))
 OUTPUT_DIR            = os.environ.get("OUTPUT_DIR", "/data/output")
 TEMPLATE_UPDATE_HOURS = float(os.environ.get("NUCLEI_TEMPLATES_UPDATE_INTERVAL_HOURS", 24))
 NUCLEI_THROTTLE_SECS  = int(os.environ.get("NUCLEI_THROTTLE_SECS", 30))
+NUCLEI_PROC_TIMEOUT   = int(os.environ.get("NUCLEI_PROC_TIMEOUT", 1800))
 
 SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
@@ -79,57 +80,47 @@ def severity_meets_threshold(severity: str) -> bool:
 
 
 def _dedupe_key(template_id: str, url: str) -> str:
-    """Stable key: same template fired against the same canonical endpoint URL."""
     raw = f"{template_id}|{url}"
     return hashlib.sha1(raw.encode()).hexdigest()
 
 
-def run_nuclei(url: str, output_file: str) -> list:
-    """Run nuclei against a single URL; return list of parsed findings."""
-    # Build severity list: include all severities >= threshold
-    sev_names = [k for k, v in SEVERITY_ORDER.items()
-                 if v >= SEVERITY_ORDER.get(SEVERITY_MIN.lower(), 2)]
-    severity_arg = ",".join(sev_names)
+def _process_finding(r: redis_lib.Redis, finding: dict, endpoint_id: int, output_file: str) -> None:
+    """Persist one nuclei finding and enqueue notify_finding if new and above threshold."""
+    template_id = finding.get("template-id", "")
+    info        = finding.get("info", {})
+    severity    = info.get("severity", "info").lower()
+    title       = info.get("name", template_id)
+    matched_at  = finding.get("matched-at", "")
+    dedupe_key  = _dedupe_key(template_id, matched_at or "")
 
-    cmd = [
-        "nuclei",
-        "-u", url,
-        "-t", TEMPLATES_DIR,
-        "-severity", severity_arg,
-        "-jsonl",
-        "-o", output_file,
-        "-silent",
-        "-no-color",
-        "-rate-limit", "10",
-        "-bulk-size", "25",
-        "-c", str(MAX_CONCURRENCY),
-        "-timeout", "15",
-        "-retries", "1",
-    ]
+    with db_conn() as conn:
+        existing = conn.execute(
+            "SELECT id FROM findings WHERE dedupe_key = ?",
+            (dedupe_key,),
+        ).fetchone()
 
-    logger.info("nuclei: %s (severity>=%s)", url, SEVERITY_MIN)
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-        if proc.returncode not in (0, 1):
-            logger.warning("nuclei stderr for %s: %s", url, proc.stderr[:500])
-    except subprocess.TimeoutExpired:
-        logger.error("nuclei timed out for %s", url)
-        return []
+        if existing:
+            conn.execute(
+                "UPDATE findings SET last_seen = datetime('now') WHERE id = ?",
+                (existing["id"],),
+            )
+            return
 
-    if not os.path.exists(output_file):
-        return []
+        finding_id = conn.execute(
+            """INSERT INTO findings
+               (endpoint_id, template_id, severity, title, matched_at,
+                raw_blob_path, dedupe_key)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (endpoint_id, template_id, severity, title, matched_at,
+             output_file, dedupe_key),
+        ).lastrowid
 
-    results = []
-    with open(output_file) as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                results.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return results
+    if severity_meets_threshold(severity):
+        enqueue(r, NOTIFY_QUEUE, {
+            "notification_type": "new_finding",
+            "finding_id": finding_id,
+        })
+        logger.info("Finding enqueued for notify: [%s] %s", severity.upper(), title)
 
 
 def process_task(r: redis_lib.Redis, task: dict) -> None:
@@ -141,7 +132,6 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
     cleanup_old_outputs(OUTPUT_DIR, "nuclei_*.jsonl")
     logger.info("Scanning %s", url)
 
-    # --- Resolve scope_root via FK chain: endpoint → subdomain → target ------
     with db_conn() as conn:
         scope_row = conn.execute(
             """SELECT t.scope_root
@@ -154,7 +144,6 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
 
     scope_root = scope_row["scope_root"] if scope_row else ""
 
-    # --- Scope guard ----------------------------------------------------------
     if scope_root:
         parsed_host = urlparse(url).hostname or ""
         if not is_in_scope(parsed_host, scope_root):
@@ -164,7 +153,6 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
             )
             return
 
-    # --- Per-domain throttle --------------------------------------------------
     if scope_root and NUCLEI_THROTTLE_SECS > 0:
         throttle_key = f"throttle:nuclei:{scope_root}"
         ttl = r.ttl(throttle_key)
@@ -176,7 +164,6 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
             time.sleep(ttl)
 
     with db_conn() as conn:
-        # TTL check — use last_scanned_at so clean endpoints aren't rescanned.
         recent = conn.execute(
             "SELECT last_scanned_at FROM endpoints WHERE id = ? AND last_scanned_at > datetime('now', ? || ' hours')",
             (endpoint_id, f"-{NUCLEI_INTERVAL_HOURS}"),
@@ -198,8 +185,50 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
     output_file = os.path.join(out_dir, f"nuclei_{ts}.jsonl")
 
+    sev_names = [k for k, v in SEVERITY_ORDER.items()
+                 if v >= SEVERITY_ORDER.get(SEVERITY_MIN.lower(), 2)]
+    severity_arg = ",".join(sev_names)
+
+    cmd = [
+        "nuclei",
+        "-u", url,
+        "-t", TEMPLATES_DIR,
+        "-severity", severity_arg,
+        "-jsonl",
+        "-silent",
+        "-no-color",
+        "-rate-limit", "10",
+        "-bulk-size", "25",
+        "-c", str(MAX_CONCURRENCY),
+        "-timeout", "15",
+        "-retries", "1",
+    ]
+
+    findings_count = 0
     try:
-        findings = run_nuclei(url, output_file)
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        with open(output_file, "w") as fh:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                fh.write(line + "\n")
+                try:
+                    finding = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.debug("Non-JSON stdout line from nuclei: %s", line[:120])
+                    continue
+                _process_finding(r, finding, endpoint_id, output_file)
+                findings_count += 1
+
+        try:
+            proc.wait(timeout=NUCLEI_PROC_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            logger.error("nuclei process timeout exceeded for %s — killed", url)
+
     except Exception:
         with db_conn() as conn:
             conn.execute(
@@ -208,46 +237,7 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
             )
         raise
 
-    logger.info("nuclei: %d finding(s) for %s", len(findings), url)
-
-    with db_conn() as conn:
-        for f in findings:
-            template_id = f.get("template-id", "")
-            info        = f.get("info", {})
-            severity    = info.get("severity", "info").lower()
-            title       = info.get("name", template_id)
-            matched_at  = f.get("matched-at", url)
-            # Dedupe on template + canonical endpoint URL (stable across runs).
-            # matched_at is stored for reference but kept out of the key because
-            # it can vary (query-string order, redirect targets, etc.).
-            dedupe_key  = _dedupe_key(template_id, url)
-
-            existing = conn.execute(
-                "SELECT id FROM findings WHERE dedupe_key = ?",
-                (dedupe_key,),
-            ).fetchone()
-
-            if existing:
-                conn.execute(
-                    "UPDATE findings SET last_seen = datetime('now') WHERE id = ?",
-                    (existing["id"],),
-                )
-                continue
-
-            finding_id = conn.execute(
-                """INSERT INTO findings
-                   (endpoint_id, template_id, severity, title, matched_at,
-                    raw_blob_path, dedupe_key)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (endpoint_id, template_id, severity, title, matched_at,
-                 output_file, dedupe_key),
-            ).lastrowid
-
-            if severity_meets_threshold(severity):
-                enqueue(r, NOTIFY_QUEUE, {
-                    "notification_type": "new_finding",
-                    "finding_id": finding_id,
-                })
+    logger.info("nuclei: %d finding(s) for %s", findings_count, url)
 
     with db_conn() as conn:
         conn.execute(
@@ -260,7 +250,6 @@ def process_task(r: redis_lib.Redis, task: dict) -> None:
             (output_file, job_id),
         )
 
-    # Set per-domain throttle so consecutive scans against the same root are spaced out.
     if scope_root and NUCLEI_THROTTLE_SECS > 0:
         r.set(f"throttle:nuclei:{scope_root}", "1", ex=NUCLEI_THROTTLE_SECS)
 
@@ -304,11 +293,10 @@ def main():
     init_db()
     recover_processing_queue(r, QUEUE, PROCESSING)
 
-    # Start background template updater
     t = threading.Thread(target=_template_updater_loop, daemon=True)
     t.start()
 
-    logger.info("Listening on queue: %s", QUEUE)
+    logger.info("Listening on queue: %s", NOTIFY_QUEUE)
 
     while True:
         try:
