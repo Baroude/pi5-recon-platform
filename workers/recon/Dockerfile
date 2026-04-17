@@ -7,7 +7,8 @@
 FROM --platform=linux/arm64 python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl unzip \
+        ca-certificates curl unzip musl \
+    && ln -s /usr/lib/aarch64-linux-musl/libc.so /usr/lib/libc.musl-aarch64.so.1 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://github.com/projectdiscovery/subfinder/releases/download/v2.6.6/subfinder_2.6.6_linux_arm64.zip \
