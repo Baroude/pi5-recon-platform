@@ -389,8 +389,8 @@
     const detailStatus = $("#detail-status");
     const detailSave = $("#detail-save");
     const detailClose = $("#detail-close");
-    const severitySelect = $("#filter-severity");
-    const statusSelect = $("#filter-status");
+    const severityChips = $("#severity-chips");
+    const statusChips = $("#status-chips");
     const targetSelect = $("#filter-target");
     const windowSelect = $("#filter-window");
     const sortSelect = $("#filter-sort");
@@ -410,11 +410,11 @@
     };
 
     function syncControls() {
-      [...severitySelect.options].forEach((option) => {
-        option.selected = state.filters.severity.includes(option.value);
+      severityChips.querySelectorAll(".filter-chip").forEach((chip) => {
+        chip.setAttribute("aria-pressed", state.filters.severity.includes(chip.value) ? "true" : "false");
       });
-      [...statusSelect.options].forEach((option) => {
-        option.selected = state.filters.status.includes(option.value);
+      statusChips.querySelectorAll(".filter-chip").forEach((chip) => {
+        chip.setAttribute("aria-pressed", state.filters.status.includes(chip.value) ? "true" : "false");
       });
       targetSelect.value = state.filters.targetId;
       windowSelect.value = state.filters.windowHours;
@@ -541,10 +541,17 @@
       }
     }
 
+    filtersForm.addEventListener("click", (event) => {
+      const chip = event.target.closest(".filter-chip");
+      if (!chip) return;
+      const pressed = chip.getAttribute("aria-pressed") === "true";
+      chip.setAttribute("aria-pressed", pressed ? "false" : "true");
+    });
+
     filtersForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      state.filters.severity = selectedValues(severitySelect);
-      state.filters.status = selectedValues(statusSelect);
+      state.filters.severity = pressedChipValues(severityChips);
+      state.filters.status = pressedChipValues(statusChips);
       state.filters.targetId = targetSelect.value;
       state.filters.windowHours = windowSelect.value;
       state.filters.sort = sortSelect.value;
@@ -675,12 +682,13 @@
           <td>${formatNumber(target.subdomain_count)}</td>
           <td>${formatNumber(target.finding_open_count)}</td>
           <td>
-            <div class="table-actions compact">
-              <button type="button" class="contrast" data-edit='${escapeHtml(JSON.stringify(target))}'>Edit</button>
+            <div class="target-actions">
+              <button type="button" class="outline contrast" data-edit='${escapeHtml(JSON.stringify(target))}'>Edit</button>
               <button type="button" class="secondary" data-run="${target.id}">Run</button>
+              <span class="target-actions-sep" aria-hidden="true"></span>
               ${target.enabled ? `<button type="button" class="secondary" data-stop="${target.id}" data-name="${escapeHtml(target.scope_root)}">Stop</button>` : ""}
               <button type="button" class="secondary" data-disable="${target.id}" data-name="${escapeHtml(target.scope_root)}">Disable</button>
-              <button type="button" class="outline danger" data-delete="${target.id}" data-name="${escapeHtml(target.scope_root)}">Delete</button>
+              <button type="button" class="outline danger" data-delete="${target.id}" data-name="${escapeHtml(target.scope_root)}">Del</button>
             </div>
           </td>
         </tr>
@@ -939,6 +947,10 @@
 
   function selectedValues(select) {
     return [...select.selectedOptions].map((option) => option.value);
+  }
+
+  function pressedChipValues(container) {
+    return [...container.querySelectorAll(".filter-chip[aria-pressed='true']")].map((chip) => chip.value);
   }
 
   function initCommon() {

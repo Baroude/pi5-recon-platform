@@ -52,51 +52,55 @@
           <div class="panel-meta" id="findings-count">0 visible</div>
         </div>
 
-        <form id="findings-filters" class="filters compact filters-toolbar">
-          <label>
-            Severity
-            <select id="filter-severity" multiple size="5">
-              <option value="critical">critical</option>
-              <option value="high">high</option>
-              <option value="medium">medium</option>
-              <option value="low">low</option>
-              <option value="info">info</option>
-            </select>
-          </label>
-          <label>
-            Status
-            <select id="filter-status" multiple size="4">
-              <option value="open">open</option>
-              <option value="triaged">triaged</option>
-              <option value="false_positive">false_positive</option>
-              <option value="fixed">fixed</option>
-            </select>
-          </label>
-          <label>
-            Target
-            <select id="filter-target"></select>
-          </label>
-          <label>
-            Window
-            <select id="filter-window">
-              <option value="1">1 hour</option>
-              <option value="24">24 hours</option>
-              <option value="168">7 days</option>
-              <option value="all">all</option>
-            </select>
-          </label>
-          <label>
-            Sort
-            <select id="filter-sort">
-              <option value="matched_desc">Newest first</option>
-              <option value="matched_asc">Oldest first</option>
-              <option value="severity_desc">Severity high to low</option>
-              <option value="severity_asc">Severity low to high</option>
-            </select>
-          </label>
-          <div class="toolbar-actions table-actions compact">
-            <button type="submit">Apply</button>
-            <button type="button" id="filter-reset" class="secondary">Reset</button>
+        <form id="findings-filters" class="filters-bar">
+          <div class="filter-row">
+            <div class="filter-chips-group">
+              <span class="filter-chips-label">Severity</span>
+              <div class="filter-chips" id="severity-chips">
+                <button type="button" class="filter-chip chip-critical" value="critical" aria-pressed="false">critical</button>
+                <button type="button" class="filter-chip chip-high" value="high" aria-pressed="false">high</button>
+                <button type="button" class="filter-chip chip-medium" value="medium" aria-pressed="false">medium</button>
+                <button type="button" class="filter-chip chip-low" value="low" aria-pressed="false">low</button>
+                <button type="button" class="filter-chip chip-info" value="info" aria-pressed="false">info</button>
+              </div>
+            </div>
+            <div class="filter-chips-group">
+              <span class="filter-chips-label">Status</span>
+              <div class="filter-chips" id="status-chips">
+                <button type="button" class="filter-chip chip-status-open" value="open" aria-pressed="false">open</button>
+                <button type="button" class="filter-chip chip-status-triaged" value="triaged" aria-pressed="false">triaged</button>
+                <button type="button" class="filter-chip chip-status-fp" value="false_positive" aria-pressed="false">false positive</button>
+                <button type="button" class="filter-chip chip-status-fixed" value="fixed" aria-pressed="false">fixed</button>
+              </div>
+            </div>
+          </div>
+          <div class="filter-row filter-selects-row">
+            <label class="filter-select-wrap">
+              Target
+              <select id="filter-target"></select>
+            </label>
+            <label class="filter-select-wrap">
+              Window
+              <select id="filter-window">
+                <option value="1">1 hour</option>
+                <option value="24">24 hours</option>
+                <option value="168">7 days</option>
+                <option value="all">all</option>
+              </select>
+            </label>
+            <label class="filter-select-wrap">
+              Sort
+              <select id="filter-sort">
+                <option value="matched_desc">Newest first</option>
+                <option value="matched_asc">Oldest first</option>
+                <option value="severity_desc">Severity ↓</option>
+                <option value="severity_asc">Severity ↑</option>
+              </select>
+            </label>
+            <div class="filter-apply-row">
+              <button type="submit">Apply</button>
+              <button type="button" id="filter-reset" class="secondary">Reset</button>
+            </div>
           </div>
         </form>
       </section>
