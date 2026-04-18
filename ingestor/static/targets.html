@@ -141,6 +141,20 @@
         </form>
       </article>
     </dialog>
+
+    <dialog id="confirm-delete-dialog" class="target-dialog">
+      <article>
+        <header>
+          <h2>Delete target?</h2>
+        </header>
+        <p>This will permanently remove <strong id="confirm-delete-name"></strong> and all associated subdomains, endpoints, findings, jobs, and output files.</p>
+        <p><strong>This cannot be undone.</strong></p>
+        <div class="dialog-actions">
+          <button type="button" id="confirm-delete-cancel" class="secondary">Cancel</button>
+          <button type="button" id="confirm-delete-confirm" class="danger">Delete</button>
+        </div>
+      </article>
+    </dialog>
   </div>
 </body>
 </html>

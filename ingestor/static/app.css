@@ -731,3 +731,12 @@ details.accordion summary::-webkit-details-marker {
     transition: none;
   }
 }
+
+button.danger, [role="button"].danger {
+  --pico-background-color: var(--pico-del-color, #c0392b);
+  --pico-border-color: var(--pico-del-color, #c0392b);
+  --pico-color: #fff;
+}
+button.danger:hover, [role="button"].danger:hover {
+  filter: brightness(0.88);
+}

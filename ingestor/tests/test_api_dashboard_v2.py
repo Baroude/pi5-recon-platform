@@ -1,4 +1,5 @@
 import importlib
+import json
 import sys
 import types
 from pathlib import Path
@@ -84,6 +85,20 @@ class FakeRedis:
         self.lists[key] = remaining
         return removed
 
+    def lpush(self, key, *values):
+        bucket = self.lists.setdefault(key, [])
+        for v in reversed(values):
+            bucket.insert(0, v)
+        return len(bucket)
+
+    def delete(self, *keys):
+        deleted = 0
+        for key in keys:
+            if key in self.lists:
+                del self.lists[key]
+                deleted += 1
+        return deleted
+
 
 @pytest.fixture
 def app_ctx(tmp_path, monkeypatch):
@@ -153,6 +168,22 @@ def _insert_endpoint(ingestor_app, target_id, hostname):
             (subdomain_id, f"https://{hostname}", hostname),
         ).lastrowid
     return endpoint_id
+
+
+def _insert_finding(ingestor_app, endpoint_id, template_id="test-tpl", raw_blob_path=None):
+    with ingestor_app.db_conn() as conn:
+        return conn.execute(
+            "INSERT INTO findings (endpoint_id, template_id, severity, matched_at, raw_blob_path, dedupe_key) VALUES (?, ?, ?, ?, ?, ?)",
+            (endpoint_id, template_id, "high", "https://example.com", raw_blob_path, f"key-{template_id}-{endpoint_id}"),
+        ).lastrowid
+
+
+def _insert_notification(ingestor_app, finding_id):
+    with ingestor_app.db_conn() as conn:
+        return conn.execute(
+            "INSERT INTO notifications (finding_id, channel, delivery_status) VALUES (?, ?, ?)",
+            (finding_id, "telegram", "sent"),
+        ).lastrowid
 
 
 def test_run_target_now_enqueues_for_enabled_target(client):
@@ -472,3 +503,107 @@ def test_progress_counts_only_open_findings(client):
     assert body["overview"]["findings_open_window"] == 1
     target = next(t for t in body["targets"] if t["id"] == target_id)
     assert target["finding_open_count"] == 2
+
+
+def test_stop_target_disables_and_drains(client):
+    test_client, ingestor_app, fake_redis, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="stop.example.com", enabled=1)
+
+    # Pre-populate queues with tasks for this target and a different target
+    fake_redis.lpush("recon_domain", json.dumps({"domain": "stop.example.com"}))
+    fake_redis.lpush("recon_domain", json.dumps({"domain": "other.example.com"}))
+    fake_redis.lpush("probe_host", json.dumps({"hostname": "sub.stop.example.com", "scope_root": "stop.example.com"}))
+    fake_redis.lpush("probe_host:processing", json.dumps({"hostname": "sub2.stop.example.com", "scope_root": "stop.example.com"}))
+
+    res = test_client.post(f"/targets/{target_id}/stop")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["stopped"] is True
+    assert body["scope_root"] == "stop.example.com"
+    assert body["tasks_drained"] == 3  # recon + probe + probe:processing
+
+    # Target should be disabled in DB
+    with ingestor_app.db_conn() as conn:
+        row = conn.execute("SELECT enabled FROM targets WHERE id = ?", (target_id,)).fetchone()
+    assert row["enabled"] == 0
+
+    # Unrelated task should survive
+    assert fake_redis.llen("recon_domain") == 1
+    remaining = json.loads(fake_redis.lrange("recon_domain", 0, 0)[0])
+    assert remaining["domain"] == "other.example.com"
+
+
+def test_stop_target_404(client):
+    test_client, _, _, _ = client
+    res = test_client.post("/targets/9999/stop")
+    assert res.status_code == 404
+
+
+def test_stop_target_already_disabled_is_idempotent(client):
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="disabled.example.com", enabled=0)
+    res = test_client.post(f"/targets/{target_id}/stop")
+    assert res.status_code == 200
+    assert res.json()["stopped"] is True
+    with ingestor_app.db_conn() as conn:
+        row = conn.execute("SELECT enabled FROM targets WHERE id = ?", (target_id,)).fetchone()
+    assert row["enabled"] == 0
+
+
+def test_purge_target_removes_all_data(client, tmp_path, monkeypatch):
+    test_client, ingestor_app, fake_redis, _ = client
+
+    # Point OUTPUT_DIR to tmp_path so file deletion is testable
+    monkeypatch.setattr(ingestor_app, "_OUTPUT_DIR", str(tmp_path))
+
+    target_id = _insert_target(ingestor_app, scope_root="purge.example.com", enabled=1)
+    endpoint_id = _insert_endpoint(ingestor_app, target_id, "sub.purge.example.com")
+
+    # Create a real file that should be deleted
+    raw_blob = tmp_path / "purge.example.com_nuclei.jsonl"
+    raw_blob.write_text('{"template-id": "test"}\n')
+    finding_id = _insert_finding(ingestor_app, endpoint_id, raw_blob_path=str(raw_blob))
+    notification_id = _insert_notification(ingestor_app, finding_id)
+
+    # Add a queue task for this target
+    fake_redis.lpush("recon_domain", json.dumps({"domain": "purge.example.com"}))
+
+    res = test_client.post(f"/targets/{target_id}/purge")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["purged"] is True
+    assert body["scope_root"] == "purge.example.com"
+    assert body["files_deleted"] == 1
+
+    # DB records gone
+    with ingestor_app.db_conn() as conn:
+        assert conn.execute("SELECT id FROM notifications WHERE finding_id = ?", (finding_id,)).fetchone() is None
+        assert conn.execute("SELECT id FROM targets WHERE id = ?", (target_id,)).fetchone() is None
+        assert conn.execute("SELECT id FROM subdomains WHERE target_id = ?", (target_id,)).fetchone() is None
+        assert conn.execute("SELECT id FROM endpoints WHERE id = ?", (endpoint_id,)).fetchone() is None
+        assert conn.execute("SELECT id FROM findings WHERE endpoint_id = ?", (endpoint_id,)).fetchone() is None
+
+    # File deleted
+    assert not raw_blob.exists()
+
+    # Queue drained
+    assert fake_redis.llen("recon_domain") == 0
+
+
+def test_purge_target_404(client):
+    test_client, _, _, _ = client
+    res = test_client.post("/targets/9999/purge")
+    assert res.status_code == 404
+
+
+def test_purge_target_no_data(client):
+    """Purge a target with no subdomains/findings — should succeed cleanly."""
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="bare.example.com", enabled=1)
+    res = test_client.post(f"/targets/{target_id}/purge")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["purged"] is True
+    assert body["files_deleted"] == 0
+    with ingestor_app.db_conn() as conn:
+        assert conn.execute("SELECT id FROM targets WHERE id = ?", (target_id,)).fetchone() is None

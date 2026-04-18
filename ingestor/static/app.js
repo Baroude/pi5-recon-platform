@@ -619,6 +619,35 @@
     const metaPromise = api("/admin/meta");
     let metaCache = null;
 
+    const confirmDeleteDialog = $("#confirm-delete-dialog");
+    let _pendingDeleteId = null;
+    let _pendingDeleteName = null;
+
+    $("#confirm-delete-cancel").addEventListener("click", () => {
+      confirmDeleteDialog.close();
+    });
+
+    $("#confirm-delete-confirm").addEventListener("click", async () => {
+      confirmDeleteDialog.close();
+      const targetId = _pendingDeleteId;
+      const scopeRoot = _pendingDeleteName;
+      _pendingDeleteId = null;
+      _pendingDeleteName = null;
+      if (!targetId) return;
+      try {
+        await api(`/targets/${targetId}/purge`, { method: "POST" });
+        setMessage(message, "success", `Deleted ${scopeRoot} and all associated data.`);
+        await refresh();
+      } catch (error) {
+        setMessage(message, "error", error.message);
+      }
+    });
+
+    confirmDeleteDialog.addEventListener("close", () => {
+      _pendingDeleteId = null;
+      _pendingDeleteName = null;
+    });
+
     async function refresh() {
       const [meta, targets] = await Promise.all([metaCache ? Promise.resolve(metaCache) : metaPromise, api("/targets")]);
       metaCache = meta;
@@ -649,7 +678,9 @@
             <div class="table-actions">
               <button type="button" class="contrast" data-edit='${escapeHtml(JSON.stringify(target))}'>Edit</button>
               <button type="button" class="secondary" data-run="${target.id}">Run now</button>
+              ${target.enabled ? `<button type="button" class="secondary" data-stop="${target.id}" data-name="${escapeHtml(target.scope_root)}">Stop</button>` : ""}
               <button type="button" class="secondary" data-disable="${target.id}" data-name="${escapeHtml(target.scope_root)}">Disable</button>
+              <button type="button" class="outline danger" data-delete="${target.id}" data-name="${escapeHtml(target.scope_root)}">Delete</button>
             </div>
           </td>
         </tr>
@@ -727,6 +758,20 @@
         return;
       }
 
+      const stopButton = event.target.closest("button[data-stop]");
+      if (stopButton) {
+        const targetId = stopButton.dataset.stop;
+        const scopeRoot = stopButton.dataset.name;
+        try {
+          await api(`/targets/${targetId}/stop`, { method: "POST" });
+          setMessage(message, "success", `Stopped — pipeline drained for ${scopeRoot}.`);
+          await refresh();
+        } catch (error) {
+          setMessage(message, "error", error.message);
+        }
+        return;
+      }
+
       const disableButton = event.target.closest("button[data-disable]");
       if (disableButton) {
         const targetId = disableButton.dataset.disable;
@@ -739,6 +784,16 @@
         } catch (error) {
           setMessage(message, "error", error.message);
         }
+        return;
+      }
+
+      const deleteButton = event.target.closest("button[data-delete]");
+      if (deleteButton) {
+        _pendingDeleteId = deleteButton.dataset.delete;
+        _pendingDeleteName = deleteButton.dataset.name;
+        $("#confirm-delete-name").textContent = _pendingDeleteName;
+        confirmDeleteDialog.showModal();
+        return;
       }
     });
 

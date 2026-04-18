@@ -14,6 +14,7 @@ Endpoints
   PATCH /targets/{id}        Update target scan configuration.
   POST /targets/{id}/run     Trigger an immediate recon enqueue for a target.
   DELETE /targets/{id}       Disable a target (sets enabled=0).
+  POST /targets/{id}/stop    Stop a target (disable + drain queues).
   GET  /targets/{id}/jobs    Recent jobs for a target.
   GET  /findings             Recent findings (supports severity/status/target/window filters).
   GET  /findings/{id}        Full finding details with best-effort raw nuclei event.
@@ -21,6 +22,7 @@ Endpoints
   GET  /health               Liveness probe.
 """
 
+import glob as _glob
 import json
 import logging
 import os
@@ -75,6 +77,7 @@ _redis: Optional[redis_lib.Redis] = None
 _refresh_thread: Optional[threading.Thread] = None
 
 _DLQ_QUEUES = ["recon_domain", "brute_domain", "probe_host", "scan_http", "notify_finding"]
+_ALL_QUEUES = _DLQ_QUEUES
 _ALLOWED_FINDING_STATUSES = {"open", "triaged", "false_positive", "fixed"}
 _ALLOWED_FINDING_SEVERITIES = {"critical", "high", "medium", "low", "info"}
 
@@ -177,6 +180,65 @@ def _decode_json_text(raw_text: Optional[str]) -> Any:
         return json.loads(raw_text)
     except Exception:
         return None
+
+
+def _drain_target_queues(r: redis_lib.Redis, scope_root: str) -> int:
+    """Remove all pending/processing queue entries for scope_root. Returns count removed."""
+    drained = 0
+    queue_lists = _ALL_QUEUES + [f"{q}:processing" for q in _ALL_QUEUES]
+    for queue in queue_lists:
+        items = r.lrange(queue, 0, -1)
+        for raw in items:
+            try:
+                payload = json.loads(raw if isinstance(raw, str) else raw.decode())
+                if payload.get("domain") == scope_root or payload.get("scope_root") == scope_root:
+                    drained += r.lrem(queue, 1, raw)
+            except Exception:
+                continue
+    inflight_keys = [
+        f"inflight:recon_domain:{scope_root}",
+        f"inflight:recon_domain:manual:{scope_root}",
+        f"inflight:brute_domain:brute:{scope_root}",
+    ]
+    r.delete(*inflight_keys)
+    return drained
+
+
+def _collect_target_file_paths(target_id: int, scope_root: str) -> set[str]:
+    """Read file paths to delete for a target. Does not delete anything."""
+    paths: set[str] = set()
+    with db_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT f.raw_blob_path FROM findings f
+            JOIN endpoints e ON e.id = f.endpoint_id
+            JOIN subdomains s ON s.id = e.subdomain_id
+            WHERE s.target_id = ?
+            """,
+            (target_id,),
+        ).fetchall()
+    for row in rows:
+        path = row["raw_blob_path"]
+        if path and _is_path_within_base(path, _OUTPUT_DIR):
+            paths.add(path)
+    pattern = os.path.join(_OUTPUT_DIR, "**", f"*{scope_root}*")
+    for path in _glob.glob(pattern, recursive=True):
+        if _is_path_within_base(path, _OUTPUT_DIR):
+            paths.add(path)
+    return paths
+
+
+def _delete_file_paths(paths: set[str]) -> int:
+    """Delete the given file paths. Returns count deleted."""
+    deleted = 0
+    for path in paths:
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+                deleted += 1
+        except OSError as exc:
+            logger.warning("Purge: could not remove %s: %s", path, exc)
+    return deleted
 
 
 def _validate_queue_name(queue: str) -> str:
@@ -886,6 +948,66 @@ def disable_target(target_id: int):
             raise HTTPException(status_code=404, detail="Target not found")
         conn.execute("UPDATE targets SET enabled = 0 WHERE id = ?", (target_id,))
     return {"disabled": target_id}
+
+
+@app.post("/targets/{target_id}/stop", status_code=200)
+def stop_target(target_id: int):
+    with db_conn() as conn:
+        row = conn.execute("SELECT scope_root FROM targets WHERE id = ?", (target_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Target not found")
+        conn.execute("UPDATE targets SET enabled = 0 WHERE id = ?", (target_id,))
+    scope_root = row["scope_root"]
+    drained = _drain_target_queues(get_r(), scope_root)
+    logger.info("Stopped target %s — drained %d task(s)", scope_root, drained)
+    return {"stopped": True, "scope_root": scope_root, "tasks_drained": drained}
+
+
+@app.post("/targets/{target_id}/purge", status_code=200)
+def purge_target(target_id: int):
+    with db_conn() as conn:
+        row = conn.execute("SELECT scope_root FROM targets WHERE id = ?", (target_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Target not found")
+
+    scope_root = row["scope_root"]
+    paths_to_delete = _collect_target_file_paths(target_id, scope_root)
+
+    with db_conn() as conn:
+        subdomain_ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM subdomains WHERE target_id = ?", (target_id,)
+        ).fetchall()]
+
+        if subdomain_ids:
+            ph = ",".join("?" * len(subdomain_ids))
+            endpoint_ids = [r["id"] for r in conn.execute(
+                f"SELECT id FROM endpoints WHERE subdomain_id IN ({ph})", subdomain_ids
+            ).fetchall()]
+
+            if endpoint_ids:
+                ep_ph = ",".join("?" * len(endpoint_ids))
+                finding_ids = [r["id"] for r in conn.execute(
+                    f"SELECT id FROM findings WHERE endpoint_id IN ({ep_ph})", endpoint_ids
+                ).fetchall()]
+
+                if finding_ids:
+                    fi_ph = ",".join("?" * len(finding_ids))
+                    conn.execute(f"DELETE FROM notifications WHERE finding_id IN ({fi_ph})", finding_ids)
+                    conn.execute(f"DELETE FROM findings WHERE id IN ({fi_ph})", finding_ids)
+
+                conn.execute(f"DELETE FROM endpoints WHERE id IN ({ep_ph})", endpoint_ids)
+
+            conn.execute(f"DELETE FROM subdomains WHERE id IN ({ph})", subdomain_ids)
+
+        conn.execute("DELETE FROM jobs WHERE target_ref = ?", (scope_root,))
+        conn.execute("DELETE FROM failed_jobs WHERE target_ref = ?", (scope_root,))
+        conn.execute("DELETE FROM targets WHERE id = ?", (target_id,))
+
+    _drain_target_queues(get_r(), scope_root)
+    files_deleted = _delete_file_paths(paths_to_delete)
+
+    logger.info("Purged target %s (id=%d) — %d file(s) deleted", scope_root, target_id, files_deleted)
+    return {"purged": True, "scope_root": scope_root, "files_deleted": files_deleted}
 
 
 @app.get("/targets/{target_id}/jobs")
