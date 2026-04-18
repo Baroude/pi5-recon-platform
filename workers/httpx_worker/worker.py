@@ -24,6 +24,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime
 from urllib.parse import urlparse, urlunparse
@@ -126,12 +127,37 @@ def run_httpx(hostname: str, output_file: str) -> list:
     ]
 
     logger.info("httpx: %s", hostname)
+    proc = None
+
+    def _pump_output(stream) -> None:
+        if stream is None:
+            return
+        for raw_line in iter(stream.readline, ""):
+            line = raw_line.rstrip("\n")
+            if not line.strip():
+                continue
+            logger.info("%s", line)
+
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        if proc.returncode not in (0, 1):
-            logger.warning("httpx stderr for %s: %s", hostname, proc.stderr[:400])
-    except subprocess.TimeoutExpired:
-        logger.error("httpx timed out for %s", hostname)
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        output_thread = threading.Thread(target=_pump_output, args=(proc.stdout,), daemon=True)
+        output_thread.start()
+        try:
+            proc.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            logger.error("httpx timed out for %s", hostname)
+            proc.kill()
+            output_thread.join(timeout=5)
+            return []
+        output_thread.join(timeout=5)
+    except FileNotFoundError:
+        logger.error("httpx binary not found for %s", hostname)
         return []
 
     if not os.path.exists(output_file):

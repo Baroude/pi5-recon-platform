@@ -334,7 +334,7 @@ def _scan_group(
                 try:
                     finding = json.loads(line)
                 except json.JSONDecodeError:
-                    logger.debug("Non-JSON nuclei output: %s", line[:120])
+                    logger.info("nuclei: %s", line[:200])
                     continue
 
                 matched_at = finding.get("matched-at", "")

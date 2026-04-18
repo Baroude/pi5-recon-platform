@@ -184,6 +184,98 @@ main {
   gap: 1rem;
 }
 
+.logs-panel {
+  gap: 1rem;
+}
+
+.logs-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.logs-worker-select {
+  display: grid;
+  gap: 0.35rem;
+  min-width: min(20rem, 100%);
+  flex: 1 1 18rem;
+}
+
+.logs-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.logs-status {
+  color: var(--app-text-soft);
+  font-size: 0.9rem;
+  text-align: right;
+}
+
+.logs-status.success {
+  color: var(--app-good);
+}
+
+.logs-status.warn {
+  color: var(--app-warn);
+}
+
+.logs-status.error {
+  color: var(--app-bad);
+}
+
+.logs-status.muted {
+  color: var(--app-text-soft);
+}
+
+.logs-viewer-shell {
+  position: relative;
+}
+
+.logs-output {
+  min-height: 28rem;
+  max-height: min(72vh, 48rem);
+  overflow: auto;
+  padding: 0.95rem 1rem;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius);
+  background: var(--app-surface-muted);
+  color: var(--pico-color);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.logs-output .empty-state {
+  margin: 0;
+}
+
+.logs-line {
+  display: block;
+}
+
+.logs-line.log-error {
+  color: var(--app-bad);
+}
+
+.logs-line.log-warning {
+  color: var(--app-warn);
+}
+
+.logs-line.log-muted {
+  color: var(--app-text-soft);
+}
+
+.logs-jump {
+  justify-self: end;
+}
+
 .hero-row {
   display: flex;
   align-items: flex-start;
@@ -1108,6 +1200,25 @@ details.accordion summary::-webkit-details-marker {
     justify-content: flex-start;
   }
 
+  .logs-toolbar {
+    align-items: stretch;
+  }
+
+  .logs-worker-select,
+  .logs-toolbar-actions {
+    width: 100%;
+  }
+
+  .logs-toolbar-actions > button,
+  .logs-toolbar-actions > [role="button"] {
+    flex: 1 1 9rem;
+  }
+
+  .logs-status {
+    width: 100%;
+    text-align: left;
+  }
+
   .filter-row,
   .filter-selects-row {
     flex-direction: column;
@@ -1124,6 +1235,11 @@ details.accordion summary::-webkit-details-marker {
   .table-actions,
   .target-actions {
     flex-wrap: wrap;
+  }
+
+  .logs-output {
+    min-height: 22rem;
+    max-height: 60vh;
   }
 }
 

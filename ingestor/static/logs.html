@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recon Platform | Logs</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="/ui/app.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body data-page="logs">
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="/ui/index.html">
+          <span class="brand-mark">R</span>
+          <span>Recon</span>
+        </a>
+        <nav class="nav-links" aria-label="Primary">
+          <a href="/ui/index.html">Dashboard</a>
+          <a href="/ui/findings.html">Findings</a>
+          <a href="/ui/subdomains.html">Subdomains</a>
+          <a href="/ui/targets.html">Targets</a>
+          <a href="/ui/companies.html">Companies</a>
+          <a href="/ui/ops.html">Ops</a>
+          <a class="is-active" href="/ui/logs.html" aria-current="page">Logs</a>
+        </nav>
+        <div class="status-meta">
+          <span class="status-dot good"></span>
+          <span id="last-updated">Waiting for data</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div id="page-message" class="message" role="status" aria-live="polite"></div>
+
+      <section class="page-header panel page-section">
+        <div class="page-header-copy">
+          <h1>Live log viewer</h1>
+          <p>Choose a worker, pull recent history, and stay on the tail while new lines stream in.</p>
+        </div>
+        <div class="page-header-actions">
+          <a href="/ui/index.html" role="button" class="secondary">Back to dashboard</a>
+        </div>
+      </section>
+
+      <section class="panel page-section logs-panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Worker logs</h2>
+            <p>Recent history loads first, then the stream keeps appending live lines.</p>
+          </div>
+          <div id="logs-connection-status" class="logs-status">Loading workers...</div>
+        </div>
+
+        <div class="logs-toolbar">
+          <label class="logs-worker-select">
+            Worker
+            <select id="logs-worker-select"></select>
+          </label>
+          <div class="logs-toolbar-actions">
+            <button type="button" id="logs-full-history">Load full history</button>
+            <button type="button" id="logs-clear" class="secondary">Clear view</button>
+            <button type="button" id="logs-jump-bottom" class="outline contrast" hidden>Jump to bottom</button>
+          </div>
+        </div>
+
+        <div class="logs-viewer-shell">
+          <div id="logs-output" class="logs-output" role="log" aria-live="polite" aria-relevant="additions text" aria-label="Live logs">
+            <div class="empty-state">Loading workers...</div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
