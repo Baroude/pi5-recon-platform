@@ -105,7 +105,8 @@ CREATE TABLE IF NOT EXISTS companies (
     name        TEXT    NOT NULL UNIQUE,
     status      TEXT    NOT NULL DEFAULT 'idle',
     created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-    last_run_at TEXT
+    last_run_at TEXT,
+    seed_domain TEXT
 );
 
 CREATE TABLE IF NOT EXISTS discovered_asns (
@@ -127,6 +128,15 @@ CREATE TABLE IF NOT EXISTS discovered_domains (
     status      TEXT    NOT NULL DEFAULT 'pending',
     created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
     UNIQUE(company_id, domain)
+);
+
+CREATE TABLE IF NOT EXISTS discovered_emails (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id  INTEGER NOT NULL REFERENCES companies(id),
+    email       TEXT    NOT NULL,
+    hop_depth   INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(company_id, email)
 );
 """
 
@@ -206,6 +216,20 @@ def init_db(path: str = None) -> None:
         conn.commit()
     except sqlite3.OperationalError:
         pass
+
+    # Smarter company discovery migrations (idempotent).
+    for col_sql in [
+        "ALTER TABLE companies ADD COLUMN seed_domain TEXT",
+        "ALTER TABLE discovered_domains ADD COLUMN trust_score   INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE discovered_domains ADD COLUMN trust_signals TEXT",
+        "ALTER TABLE discovered_domains ADD COLUMN source        TEXT",
+        "ALTER TABLE discovered_domains ADD COLUMN hop_depth     INTEGER NOT NULL DEFAULT 0",
+    ]:
+        try:
+            conn.execute(col_sql)
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
     conn.commit()
     conn.close()
