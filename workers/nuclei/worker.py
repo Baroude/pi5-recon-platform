@@ -70,6 +70,28 @@ NUCLEI_RETRIES        = int(os.environ.get("NUCLEI_RETRIES", 1))
 
 SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
+TECH_TEMPLATE_MAP = {
+    "wordpress":   ["cms/wordpress"],
+    "drupal":      ["cms/drupal"],
+    "joomla":      ["cms/joomla"],
+    "apache":      ["misconfiguration/apache"],
+    "nginx":       ["misconfiguration/nginx"],
+    "iis":         ["misconfiguration/iis"],
+    "php":         ["vulnerabilities/php"],
+    "spring":      ["vulnerabilities/spring"],
+    "laravel":     ["vulnerabilities/laravel"],
+    "tomcat":      ["misconfiguration/tomcat"],
+    "jenkins":     ["default-logins/jenkins", "exposures/jenkins"],
+    "gitlab":      ["default-logins/gitlab"],
+    "grafana":     ["default-logins/grafana", "exposures/grafana"],
+    "elastic":     ["exposures/elastic"],
+    "kibana":      ["exposures/kibana"],
+    "jira":        ["default-logins/jira"],
+    "confluence":  ["default-logins/confluence"],
+}
+
+API_PATH_PATTERNS = ["/api/", "/v1/", "/v2/", "/v3/", "/rest/", "/graphql", "/gql"]
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
@@ -160,6 +182,26 @@ def _resolve_template_path(template_name: str) -> str:
     return candidate
 
 
+def _resolve_optional_template_path(subpath: str) -> str | None:
+    """Return absolute path for a tech-derived template subpath, or None if missing.
+
+    Unlike _resolve_template_path(), a missing path returns None instead of
+    falling back to the templates root (which would broaden the scan to all templates).
+    """
+    if not subpath or ".." in subpath.split("/"):
+        return None
+    candidate = os.path.join(TEMPLATES_DIR, subpath.strip("/"))
+    if not os.path.exists(candidate):
+        logger.warning("Tech template path not found, skipping: %s", candidate)
+        return None
+    return candidate
+
+
+def _is_api_endpoint(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    return any(p in path for p in API_PATH_PATTERNS)
+
+
 def _wait_for_scope_throttle(r: redis_lib.Redis, scope_root: str) -> None:
     """
     Enforce a minimum delay between nuclei batch starts for the same scope_root.
@@ -185,15 +227,23 @@ def _wait_for_scope_throttle(r: redis_lib.Redis, scope_root: str) -> None:
         time.sleep(wait_secs)
 
 
-def _scan_group(r: redis_lib.Redis, group: list, template_name: str) -> None:
+def _scan_group(
+    r: redis_lib.Redis,
+    group: list,
+    template_name: str,
+    tech_templates: set[str] | None = None,
+    is_api_batch: bool = False,
+) -> None:
     urls = [t["url"] for t in group]
     url_to_endpoint = {t["url"]: t["endpoint_id"] for t in group}
     scope_root = group[0].get("scope_root", "") if group else ""
     _wait_for_scope_throttle(r, scope_root)
     logger.info(
-        "Scanning batch of %d URL(s) with template '%s': %s",
+        "Scanning batch of %d URL(s) with template '%s'%s%s: %s",
         len(urls),
         template_name,
+        f" +tech[{','.join(sorted(tech_templates))}]" if tech_templates else "",
+        " +api" if is_api_batch else "",
         ", ".join(urls),
     )
 
@@ -237,6 +287,14 @@ def _scan_group(r: redis_lib.Redis, group: list, template_name: str) -> None:
         "-timeout", str(NUCLEI_TIMEOUT_SECS),
         "-retries", str(NUCLEI_RETRIES),
     ]
+
+    for subpath in sorted(tech_templates or []):
+        resolved = _resolve_optional_template_path(subpath)
+        if resolved:
+            cmd += ["-t", resolved]
+
+    if is_api_batch:
+        cmd += ["-tags", "api"]
 
     findings_count = 0
     proc = None
@@ -370,7 +428,13 @@ def process_batch(r: redis_lib.Redis, tasks: list) -> None:
             logger.info("Skipping %s - scanned recently", url)
             continue
 
-        valid.append({**task, "scope_root": scope_root, "nuclei_template": nuclei_template})
+        is_api = _is_api_endpoint(url)
+        valid.append({
+            **task,
+            "scope_root": scope_root,
+            "nuclei_template": nuclei_template,
+            "is_api": is_api,
+        })
 
     if not valid:
         return
@@ -381,10 +445,24 @@ def process_batch(r: redis_lib.Redis, tasks: list) -> None:
     for task in valid:
         scope_root = task.get("scope_root") or ""
         template_name = (task.get("nuclei_template") or "all").strip().strip("/") or "all"
-        grouped.setdefault((scope_root, template_name), []).append(task)
+        is_api = task.get("is_api", False)
+        grouped.setdefault((scope_root, template_name, is_api), []).append(task)
 
-    for (_, template_name), group in grouped.items():
-        _scan_group(r, group, template_name)
+    for (_, template_name, is_api_batch), group in grouped.items():
+        endpoint_ids = [t["endpoint_id"] for t in group]
+        placeholders = ",".join("?" * len(endpoint_ids))
+        tech_templates: set[str] = set()
+        with db_conn() as conn:
+            rows = conn.execute(
+                f"SELECT technologies FROM endpoints WHERE id IN ({placeholders})",
+                endpoint_ids,
+            ).fetchall()
+        for row in rows:
+            if row["technologies"]:
+                for tech in json.loads(row["technologies"]):
+                    tech_templates.update(TECH_TEMPLATE_MAP.get(tech.lower(), []))
+
+        _scan_group(r, group, template_name, tech_templates=tech_templates, is_api_batch=is_api_batch)
 
 
 def record_failed_job(tasks: list, reason: str) -> None:

@@ -88,6 +88,10 @@ _DEFAULT_ALLOWED_NUCLEI_TEMPLATES = {
     "network",
     "dns",
     "ssl",
+    "exposures",
+    "takeovers",
+    "default-logins",
+    "misconfiguration",
 }
 _OUTPUT_DIR = os.path.abspath(os.environ.get("OUTPUT_DIR", "/data/output"))
 _STATIC_DIR = "/app/static" if os.path.isdir("/app/static") else os.path.join(os.path.dirname(__file__), "static")
