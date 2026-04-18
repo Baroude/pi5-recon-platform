@@ -654,3 +654,23 @@ def test_shared_refresh_shell(client, path, data_page):
     assert 'class="page-header-actions"' in html
     assert len(current_links) == 1
     assert current_links[0] == expected_current_href
+
+
+def test_refresh_tokens_and_layout_hooks(client):
+    test_client, _, _, _ = client
+    res = test_client.get("/ui/app.css")
+    assert res.status_code == 200
+
+    css = res.text
+    for marker in [
+        "--app-bg:",
+        "--app-surface-muted:",
+        "--app-accent-soft:",
+        ".page-header {",
+        ".page-header-copy {",
+        ".page-header-actions {",
+        ".page-section {",
+        ".table-actions.compact {",
+        ".inspector-panel {",
+    ]:
+        assert marker in css
