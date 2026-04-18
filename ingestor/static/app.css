@@ -475,6 +475,12 @@ table {
   font-size: 0.95rem;
 }
 
+table td,
+table th {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
 table tbody tr {
   cursor: default;
 }
@@ -502,8 +508,9 @@ td code,
 
 .table-actions.compact {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: auto auto;
   gap: 0.25rem;
+  justify-content: start;
 }
 
 .table-actions button,
@@ -514,9 +521,10 @@ td code,
 
 .table-actions.compact button,
 .table-actions.compact a {
-  min-height: 2rem;
-  padding: 0.35rem 0.5rem;
+  min-height: 1.9rem;
+  padding: 0.3rem 0.6rem;
   font-size: 0.8rem;
+  white-space: nowrap;
   justify-content: center;
   text-align: center;
 }
