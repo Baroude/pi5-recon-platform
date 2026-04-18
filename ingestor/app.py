@@ -22,6 +22,7 @@ Endpoints
   GET  /health               Liveness probe.
 """
 
+import asyncio
 import glob as _glob
 import json
 import logging
@@ -30,12 +31,13 @@ import re
 import sys
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 import redis as redis_lib
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
@@ -90,6 +92,7 @@ _DLQ_QUEUES = [
 _ALL_QUEUES = _DLQ_QUEUES
 _ALLOWED_FINDING_STATUSES = {"open", "triaged", "false_positive", "fixed"}
 _ALLOWED_FINDING_SEVERITIES = {"critical", "high", "medium", "low", "info"}
+_LOG_WORKER_RE = re.compile(r"^[\w-]+$")
 
 _ALLOWED_WORDLISTS = {"dns-small.txt", "dns-medium.txt", "dns-large.txt"}
 _DEFAULT_ALLOWED_NUCLEI_TEMPLATES = {
@@ -302,6 +305,31 @@ def _serialize_dlq_entry(raw_item: Any) -> dict[str, Any]:
     return {"raw": raw_text, "payload": _decode_json_text(raw_text)}
 
 
+def _validate_log_worker(worker: str) -> str:
+    if not _LOG_WORKER_RE.fullmatch(worker):
+        raise HTTPException(status_code=400, detail="Invalid worker")
+    if not worker.startswith("worker-"):
+        raise HTTPException(status_code=400, detail="Invalid worker")
+    return worker
+
+
+def _log_path_for_worker(worker: str) -> str:
+    return os.path.join(LOG_DIR, f"{worker}.log")
+
+
+def _read_log_lines(path: str, *, lines: int) -> tuple[list[str], int]:
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        if lines == 0:
+            output = handle.read().splitlines()
+        else:
+            tail: deque[str] = deque(maxlen=lines)
+            for raw in handle:
+                tail.append(raw.rstrip("\n"))
+            output = list(tail)
+        end_offset = handle.tell()
+    return output, end_offset
+
+
 def get_r() -> redis_lib.Redis:
     global _redis
     if _redis is None:
@@ -333,6 +361,70 @@ def on_startup():
 @app.get("/", include_in_schema=False)
 def root():
     return RedirectResponse(url="/ui/index.html")
+
+
+@app.get("/logs")
+def list_logs():
+    workers = []
+    for path in _glob.glob(os.path.join(LOG_DIR, "*.log")):
+        if os.path.isfile(path):
+            worker = os.path.splitext(os.path.basename(path))[0]
+            if worker.startswith("worker-"):
+                workers.append(worker)
+    return {"workers": sorted(workers)}
+
+
+@app.get("/logs/{worker}")
+def get_log_lines(
+    worker: str,
+    response: Response,
+    lines: int = Query(default=500, ge=0, le=10000),
+):
+    worker_name = _validate_log_worker(worker)
+    path = _log_path_for_worker(worker_name)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Log file not found")
+
+    selected_lines, end_offset = _read_log_lines(path, lines=lines)
+    response.headers["X-Log-Offset"] = str(end_offset)
+    return {"lines": selected_lines}
+
+
+@app.get("/logs/{worker}/stream")
+async def stream_log(
+    worker: str,
+    request: Request,
+    offset: int | None = Query(default=None, ge=0),
+):
+    worker_name = _validate_log_worker(worker)
+    path = _log_path_for_worker(worker_name)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Log file not found")
+
+    async def event_stream():
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            handle.seek(0, os.SEEK_END)
+            file_end = handle.tell()
+            start_offset = file_end if offset is None else min(offset, file_end)
+            handle.seek(start_offset)
+            while True:
+                if await request.is_disconnected():
+                    break
+                line = handle.readline()
+                if line:
+                    cursor = handle.tell()
+                    yield f"id: {cursor}\ndata: {line.rstrip('\r\n')}\n\n"
+                    continue
+                await asyncio.sleep(0.2)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

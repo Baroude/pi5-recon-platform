@@ -120,6 +120,7 @@ def _stream_into_queue(
                 hostname = line.strip()
                 if hostname:
                     fh.write(hostname + "\n")
+                    logger.info("%s: %s", tool_name, hostname)
                     out_q.put((hostname, tool_name))
 
         if proc.poll() is None:

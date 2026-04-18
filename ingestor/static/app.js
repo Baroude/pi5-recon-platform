@@ -1206,6 +1206,7 @@
     let reconnectTimer = null;
     let reconnectDelayMs = 1000;
     let isAtBottom = true;
+    let lastStreamOffset = null;
 
     function setStatus(text, tone = "") {
       if (!statusEl) return;
@@ -1318,12 +1319,12 @@
         if (activeToken !== token || activeWorker === "") {
           return;
         }
-        connectStream(activeWorker, token);
+        connectStream(activeWorker, token, lastStreamOffset);
       }, delay);
       reconnectDelayMs = Math.min(reconnectDelayMs * 2, 30000);
     }
 
-    function connectStream(worker, token) {
+    function connectStream(worker, token, offset = null) {
       clearReconnectTimer();
       if (activeToken !== token || worker !== activeWorker) {
         return;
@@ -1334,7 +1335,10 @@
       }
 
       setStatus("Connecting to live stream...", "warn");
-      const source = new EventSource(`/logs/${encodeURIComponent(worker)}/stream`);
+      const streamPath = offset != null
+        ? `/logs/${encodeURIComponent(worker)}/stream?offset=${encodeURIComponent(String(offset))}`
+        : `/logs/${encodeURIComponent(worker)}/stream`;
+      const source = new EventSource(streamPath);
       eventSource = source;
 
       source.onopen = () => {
@@ -1350,6 +1354,10 @@
       source.onmessage = (event) => {
         if (activeToken !== token || worker !== activeWorker) {
           return;
+        }
+        const eventOffset = Number(event.lastEventId);
+        if (Number.isFinite(eventOffset)) {
+          lastStreamOffset = eventOffset;
         }
         appendLine(event.data);
       };
@@ -1380,14 +1388,26 @@
       renderEmpty("Loading log lines...");
 
       try {
-        const payload = await api(`/logs/${encodeURIComponent(worker)}?lines=${lines}`);
+        const response = await fetch(`/logs/${encodeURIComponent(worker)}?lines=${lines}`, {
+          headers: { Accept: "application/json" },
+        });
+        const rawText = await response.text();
+        const payload = rawText ? safeJson(rawText) : null;
+        if (!response.ok) {
+          const detail = payload && typeof payload === "object" ? payload.detail || payload.message : rawText;
+          throw new Error(typeof detail === "string" ? detail : response.statusText);
+        }
+        const offsetHeader = response.headers.get("x-log-offset");
+        const logOffset = offsetHeader == null ? null : Number(offsetHeader);
+
         if (activeToken !== token || worker !== activeWorker) {
           return;
         }
         renderLines(Array.isArray(payload?.lines) ? payload.lines : []);
+        lastStreamOffset = Number.isFinite(logOffset) ? logOffset : null;
         setUpdatedAt(updatedAt, Date.now());
         if (refreshStream) {
-          connectStream(worker, token);
+          connectStream(worker, token, lastStreamOffset);
         }
       } catch (error) {
         if (activeToken !== token || worker !== activeWorker) {
