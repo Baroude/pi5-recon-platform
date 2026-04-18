@@ -70,7 +70,9 @@
             </label>
             <label class="filter-select-wrap">
               Technology
-              <input id="subdomains-filter-technology" type="search" placeholder="wordpress">
+              <select id="subdomains-filter-technology">
+                <option value="">All technologies</option>
+              </select>
             </label>
             <label class="filter-select-wrap subdomains-search-wrap">
               Hostname search
@@ -113,6 +115,7 @@
               <tr>
                 <th>Hostname</th>
                 <th>Target</th>
+                <th>Source</th>
                 <th>Status</th>
                 <th>Last seen</th>
                 <th>Endpoints</th>
@@ -123,17 +126,19 @@
         </div>
       </section>
 
-      <section class="panel page-section subdomain-detail-panel">
-        <div class="panel-header">
-          <div>
-            <h2 class="panel-title">Hostname detail</h2>
-            <p>Selection stays subdomain-centered and rolls endpoint activity into a compact summary.</p>
-          </div>
-        </div>
-        <div id="subdomain-detail-content" class="subdomain-detail-content">
-          <div class="empty-state">Select a hostname row to inspect its scope, endpoint counts, and aggregated technologies.</div>
-        </div>
-      </section>
+      <dialog id="subdomain-dialog" class="finding-dialog subdomain-dialog">
+        <article>
+          <header class="finding-dialog-header">
+            <div class="finding-dialog-title-row">
+              <div id="subdomain-dialog-pills" class="finding-dialog-pills"></div>
+              <button type="button" id="subdomain-detail-close" class="secondary">Close</button>
+            </div>
+            <h2 id="subdomain-dialog-title" class="finding-dialog-title"></h2>
+            <div id="subdomain-dialog-meta-row" class="finding-dialog-meta-row"></div>
+          </header>
+          <div id="subdomain-detail-content"></div>
+        </article>
+      </dialog>
     </main>
   </div>
 </body>

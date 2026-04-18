@@ -227,6 +227,16 @@
     select.value = currentValue;
   }
 
+  function renderSelectOptions(select, values, { defaultLabel = "All", currentValue = "" } = {}) {
+    if (!select) return;
+    const options = [`<option value="">${escapeHtml(defaultLabel)}</option>`];
+    (values || []).forEach((value) => {
+      options.push(`<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`);
+    });
+    select.innerHTML = options.join("");
+    select.value = currentValue;
+  }
+
   function renderWordlistOptions(select, wordlists, currentValue = "dns-small.txt") {
     if (!select) return;
     select.innerHTML = (wordlists || []).map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("");
@@ -654,16 +664,22 @@
     const filtersForm = $("#subdomains-filters");
     const targetSelect = $("#subdomains-filter-target");
     const statusSelect = $("#subdomains-filter-status");
-    const technologyInput = $("#subdomains-filter-technology");
+    const technologySelect = $("#subdomains-filter-technology");
     const searchInput = $("#subdomains-filter-search");
     const sortBySelect = $("#subdomains-filter-sort-by");
     const sortDirSelect = $("#subdomains-filter-sort-dir");
     const tbody = $("#subdomains-body");
+    const dialog = $("#subdomain-dialog");
+    const dialogTitle = $("#subdomain-dialog-title");
+    const dialogPills = $("#subdomain-dialog-pills");
+    const dialogMetaRow = $("#subdomain-dialog-meta-row");
     const detailContent = $("#subdomain-detail-content");
+    const detailClose = $("#subdomain-detail-close");
 
     const query = new URLSearchParams(window.location.search);
     const state = {
       targets: [],
+      technologies: [],
       rows: [],
       selectedId: null,
       filters: {
@@ -678,8 +694,11 @@
 
     function syncControls() {
       renderTargetOptions(targetSelect, state.targets, state.filters.targetId);
+      renderSelectOptions(technologySelect, state.technologies, {
+        defaultLabel: "All technologies",
+        currentValue: state.filters.technology,
+      });
       statusSelect.value = state.filters.status;
-      technologyInput.value = state.filters.technology;
       searchInput.value = state.filters.search;
       sortBySelect.value = state.filters.sortBy;
       sortDirSelect.value = state.filters.sortDir;
@@ -700,7 +719,7 @@
     function readFiltersFromControls() {
       state.filters.targetId = targetSelect.value;
       state.filters.status = statusSelect.value;
-      state.filters.technology = technologyInput.value.trim();
+      state.filters.technology = technologySelect.value;
       state.filters.search = searchInput.value.trim();
       state.filters.sortBy = sortBySelect.value;
       state.filters.sortDir = sortDirSelect.value;
@@ -708,6 +727,12 @@
 
     async function loadTargets() {
       state.targets = await api("/targets");
+      syncControls();
+    }
+
+    async function loadTechnologyOptions() {
+      const options = await api("/subdomains/options");
+      state.technologies = options.technologies || [];
       syncControls();
     }
 
@@ -724,31 +749,34 @@
       state.rows = await api(`/subdomains${buildQuery(params)}`);
       renderSubdomainsTable();
 
-      if (!state.rows.length) {
-        state.selectedId = null;
-        renderSubdomainDetail(null);
+      const selectedRow = state.rows.find((row) => row.id === state.selectedId) || null;
+      if (dialog.open) {
+        if (selectedRow) {
+          renderSubdomainDialog(selectedRow);
+        } else {
+          closeSubdomainDialog({ clearSelection: true });
+        }
         return;
       }
 
-      const selectedRow = state.rows.find((row) => row.id === state.selectedId) || state.rows[0];
-      state.selectedId = selectedRow.id;
-      renderSubdomainDetail(selectedRow);
+      if (state.selectedId && !selectedRow) {
+        state.selectedId = null;
+        renderSubdomainsTable();
+      }
     }
 
     function renderSubdomainsTable() {
       $("#subdomains-count").textContent = `${state.rows.length} visible`;
       if (!state.rows.length) {
-        tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state">No hostnames match the current filters.</div></td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state">No hostnames match the current filters.</div></td></tr>';
         return;
       }
 
       tbody.innerHTML = state.rows.map((row) => `
         <tr class="clickable subdomain-row ${row.id === state.selectedId ? "is-selected" : ""}" data-subdomain-row="${row.id}">
-          <td>
-            <strong>${escapeHtml(row.hostname)}</strong>
-            <div class="muted">${escapeHtml(row.source || "source unknown")}</div>
-          </td>
+          <td><strong>${escapeHtml(row.hostname)}</strong></td>
           <td>${escapeHtml(row.scope_root)}</td>
+          <td>${escapeHtml(row.source || "-")}</td>
           <td>${subdomainStatusPill(row.status)}</td>
           <td><span data-rel-ts="${escapeHtml(row.last_seen || "")}">${escapeHtml(relTs(row.last_seen))}</span></td>
           <td>${formatNumber(row.endpoint_count)}</td>
@@ -756,57 +784,73 @@
       `).join("");
     }
 
-    function renderSubdomainDetail(row) {
+    function renderSubdomainDialog(row) {
+      dialogPills.innerHTML = "";
+      dialogTitle.textContent = "";
+      dialogMetaRow.innerHTML = "";
+
       if (!row) {
-        detailContent.innerHTML = '<div class="empty-state">Select a hostname row to inspect its scope, endpoint counts, and aggregated technologies.</div>';
+        detailContent.innerHTML = '<div class="empty-state">No hostname selected.</div>';
         return;
       }
 
-      const technologyTags = (row.technology_tags || []).length
-        ? row.technology_tags.map((tag) => `<span class="subdomain-tech-tag">${escapeHtml(tag)}</span>`).join("")
-        : '<span class="muted">No technologies recorded.</span>';
+      try {
+        const technologyTags = (row.technology_tags || []).length
+          ? row.technology_tags.map((tag) => `<span class="subdomain-tech-tag">${escapeHtml(tag)}</span>`).join("")
+          : '<div class="subdomain-tech-empty">No technologies recorded.</div>';
 
-      detailContent.innerHTML = `
-        <div class="subdomain-detail-header">
-          <div>
-            <div class="eyebrow">Hostname Detail</div>
-            <h3 class="subdomain-detail-title">${escapeHtml(row.hostname)}</h3>
+        dialogPills.innerHTML = subdomainStatusPill(row.status);
+        dialogTitle.textContent = row.hostname || "-";
+        dialogMetaRow.innerHTML = [
+          row.scope_root ? `<span class="meta-item"><span class="meta-label">Target</span> ${escapeHtml(row.scope_root)}</span>` : "",
+          row.source ? `<span class="meta-item"><span class="meta-label">Source</span> ${escapeHtml(row.source)}</span>` : "",
+          row.first_seen ? `<span class="meta-item"><span class="meta-label">First seen</span> ${escapeHtml(relTs(row.first_seen))}</span>` : "",
+          row.last_seen ? `<span class="meta-item"><span class="meta-label">Last seen</span> ${escapeHtml(relTs(row.last_seen))}</span>` : "",
+        ].filter(Boolean).join("");
+
+        const fields = [
+          ["Target", escapeHtml(row.scope_root || "-")],
+          ["Source", escapeHtml(row.source || "-")],
+          ["First seen", escapeHtml(fmtTs(row.first_seen))],
+          ["Last seen", escapeHtml(fmtTs(row.last_seen))],
+          ["Endpoint count", formatNumber(row.endpoint_count)],
+          ["Alive endpoints", formatNumber(row.alive_endpoint_count)],
+        ];
+
+        detailContent.innerHTML = `
+          <div class="finding-fields">
+            ${fields.map(([label, value]) => `
+              <div class="finding-field">
+                <div class="finding-field-label">${label}</div>
+                <div class="finding-field-value">${value}</div>
+              </div>
+            `).join("")}
           </div>
-          <div class="finding-dialog-pills">
-            ${subdomainStatusPill(row.status)}
+          <div class="subdomain-tech-section">
+            <h3>Technology tags</h3>
+            <div class="subdomain-tech-list">${technologyTags}</div>
           </div>
-        </div>
-        <div class="finding-fields">
-          <div class="finding-field">
-            <div class="finding-field-label">Target</div>
-            <div class="finding-field-value">${escapeHtml(row.scope_root || "-")}</div>
-          </div>
-          <div class="finding-field">
-            <div class="finding-field-label">Source</div>
-            <div class="finding-field-value">${escapeHtml(row.source || "-")}</div>
-          </div>
-          <div class="finding-field">
-            <div class="finding-field-label">First seen</div>
-            <div class="finding-field-value">${escapeHtml(fmtTs(row.first_seen))}</div>
-          </div>
-          <div class="finding-field">
-            <div class="finding-field-label">Last seen</div>
-            <div class="finding-field-value">${escapeHtml(fmtTs(row.last_seen))}</div>
-          </div>
-          <div class="finding-field">
-            <div class="finding-field-label">Endpoint count</div>
-            <div class="finding-field-value">${formatNumber(row.endpoint_count)}</div>
-          </div>
-          <div class="finding-field">
-            <div class="finding-field-label">Alive endpoints</div>
-            <div class="finding-field-value">${formatNumber(row.alive_endpoint_count)}</div>
-          </div>
-        </div>
-        <div class="subdomain-tech-section">
-          <h3>Technology tags</h3>
-          <div class="subdomain-tech-list">${technologyTags}</div>
-        </div>
-      `;
+        `;
+      } catch (error) {
+        detailContent.innerHTML = `<div class="empty-state">Failed to render hostname detail: ${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function openSubdomainDialog(subdomainId) {
+      state.selectedId = subdomainId;
+      renderSubdomainsTable();
+      const row = state.rows.find((item) => item.id === subdomainId) || null;
+      renderSubdomainDialog(row);
+      if (!dialog.open) dialog.showModal();
+      applyRelativeTimestamps();
+    }
+
+    function closeSubdomainDialog({ clearSelection = false } = {}) {
+      if (clearSelection) {
+        state.selectedId = null;
+        renderSubdomainsTable();
+      }
+      if (dialog.open) dialog.close();
     }
 
     async function applyFilters() {
@@ -828,10 +872,7 @@
     tbody.addEventListener("click", (event) => {
       const row = event.target.closest("tr[data-subdomain-row]");
       if (!row) return;
-      state.selectedId = Number(row.dataset.subdomainRow);
-      renderSubdomainsTable();
-      renderSubdomainDetail(state.rows.find((item) => item.id === state.selectedId) || null);
-      applyRelativeTimestamps();
+      openSubdomainDialog(Number(row.dataset.subdomainRow));
     });
 
     $("#subdomains-reset").addEventListener("click", async () => {
@@ -847,8 +888,13 @@
       await applyFilters();
     });
 
+    detailClose.addEventListener("click", () => closeSubdomainDialog());
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) closeSubdomainDialog();
+    });
+
     syncControls();
-    loadTargets()
+    Promise.all([loadTargets(), loadTechnologyOptions()])
       .then(() => loadSubdomains())
       .then(() => {
         staleBanner.classList.remove("is-visible");

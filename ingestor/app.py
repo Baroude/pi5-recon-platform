@@ -1283,4 +1283,25 @@ def list_subdomains(
     return serialized_rows
 
 
+@app.get("/subdomains/options")
+def list_subdomain_options():
+    with db_conn() as conn:
+        rows = conn.execute(
+            """
+            WITH endpoint_technologies AS (
+                SELECT DISTINCT
+                    LOWER(TRIM(CAST(je.value AS TEXT))) AS technology
+                FROM endpoints e
+                JOIN json_each(CASE WHEN json_valid(e.technologies) THEN e.technologies ELSE '[]' END) je
+                WHERE TRIM(CAST(je.value AS TEXT)) <> ''
+            )
+            SELECT technology
+            FROM endpoint_technologies
+            ORDER BY technology ASC
+            """
+        ).fetchall()
+
+    return {"technologies": [row["technology"] for row in rows]}
+
+
 app.mount("/ui", StaticFiles(directory=_STATIC_DIR, html=True), name="ui")

@@ -285,6 +285,18 @@ Response shape:
 ]
 ```
 
+### GET `/subdomains/options`
+
+Return the normalized technology vocabulary used by the subdomains inventory filter.
+
+Response shape:
+
+```json
+{
+  "technologies": ["amazon web services", "nginx", "wordpress"]
+}
+```
+
 ## Health
 
 ### GET `/health`

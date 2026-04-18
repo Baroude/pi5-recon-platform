@@ -322,7 +322,17 @@ def test_admin_meta_returns_expected_keys(client):
     assert "allowed_wordlists" in body
     assert set(body["allowed_wordlists"]) == {"dns-small.txt", "dns-medium.txt", "dns-large.txt"}
     assert "allowed_nuclei_templates" in body
-    assert set(body["allowed_nuclei_templates"]) == {"all", "dns", "http", "network", "ssl"}
+    assert {
+        "all",
+        "default-logins",
+        "dns",
+        "exposures",
+        "http",
+        "misconfiguration",
+        "network",
+        "ssl",
+        "takeovers",
+    } <= set(body["allowed_nuclei_templates"])
     assert "defaults" in body
     assert "bounds" in body
     assert "recon_interval_hours" in body
@@ -612,6 +622,32 @@ def test_subdomains_filter_by_technology_case_insensitive(client):
     res = test_client.get("/subdomains?technology=wordpress&limit=50")
     assert res.status_code == 200
     assert [row["hostname"] for row in res.json()] == ["blog.tech.example.com"]
+
+
+def test_subdomains_options_returns_normalized_sorted_technologies(client):
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="options.example.com")
+    _insert_subdomain_with_endpoints(
+        ingestor_app,
+        target_id,
+        "blog.options.example.com",
+        endpoints=[{"technologies": ["WordPress", "nginx", ""]}],
+    )
+    _insert_subdomain_with_endpoints(
+        ingestor_app,
+        target_id,
+        "cdn.options.example.com",
+        endpoints=[
+            {"technologies": "["},
+            {"technologies": ["Amazon Web Services"]},
+        ],
+    )
+
+    res = test_client.get("/subdomains/options")
+    assert res.status_code == 200
+    assert res.json() == {
+        "technologies": ["amazon web services", "nginx", "wordpress"],
+    }
 
 
 def test_subdomains_filter_by_search_substring(client):
@@ -925,6 +961,7 @@ def test_purge_target_no_data(client):
     [
         ("/ui/index.html", "dashboard"),
         ("/ui/findings.html", "findings"),
+        ("/ui/subdomains.html", "subdomains"),
         ("/ui/targets.html", "targets"),
         ("/ui/ops.html", "ops"),
     ],
@@ -951,6 +988,7 @@ def test_shared_refresh_shell(client, path, data_page):
     expected_current_href = {
         "/ui/index.html": "/ui/index.html",
         "/ui/findings.html": "/ui/findings.html",
+        "/ui/subdomains.html": "/ui/subdomains.html",
         "/ui/targets.html": "/ui/targets.html",
         "/ui/ops.html": "/ui/ops.html",
     }[path]
@@ -995,6 +1033,7 @@ def test_refresh_tokens_and_layout_hooks(client):
     [
         "/ui/index.html",
         "/ui/findings.html",
+        "/ui/subdomains.html",
         "/ui/targets.html",
         "/ui/ops.html",
     ],
@@ -1037,6 +1076,25 @@ def test_dense_layout_hooks(client, path):
         assert {"panel", "page-section", "finding-detail", "inspector-panel"} <= aside_tokens
 
         body_match = re.search(r'<tbody\b[^>]*id="findings-body"[^>]*>', html)
+        assert body_match is not None
+    elif path == "/ui/subdomains.html":
+        form_match = re.search(r'<form\b[^>]*id="subdomains-filters"[^>]*class="([^"]+)"[^>]*>', html)
+        assert form_match is not None
+        form_tokens = set(form_match.group(1).split())
+        assert {"filters", "compact", "filters-toolbar"} <= form_tokens
+
+        source_header = re.search(r"<th>\s*Source\s*</th>", html)
+        assert source_header is not None
+
+        technology_match = re.search(r'<select\b[^>]*id="subdomains-filter-technology"[^>]*>', html)
+        assert technology_match is not None
+
+        dialog_match = re.search(r'<dialog\b[^>]*id="subdomain-dialog"[^>]*class="([^"]+)"[^>]*>', html)
+        assert dialog_match is not None
+        dialog_tokens = set(dialog_match.group(1).split())
+        assert {"finding-dialog", "subdomain-dialog"} <= dialog_tokens
+
+        body_match = re.search(r'<tbody\b[^>]*id="subdomains-body"[^>]*>', html)
         assert body_match is not None
     elif path == "/ui/targets.html":
         create_match = re.search(r'<details\b[^>]*class="([^"]+)"[^>]*>\s*<summary><strong>Create target</strong></summary>', html, re.S)

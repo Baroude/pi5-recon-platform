@@ -811,27 +811,22 @@ button,
   flex: 1;
 }
 
-.subdomain-detail-content {
-  display: grid;
-  gap: 1rem;
+#subdomain-detail-content {
+  padding: 1.4rem 1.6rem;
+  overflow-y: auto;
+  flex: 1;
 }
 
-.subdomain-detail-header {
-  display: flex;
+.subdomain-dialog .finding-dialog-title-row {
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
 }
 
-.subdomain-detail-title {
-  margin: 0;
-  font-size: clamp(1.05rem, 2vw, 1.3rem);
+.subdomain-dialog .finding-dialog-title {
   word-break: break-word;
 }
 
-.subdomain-detail-panel .panel-header {
-  margin-bottom: 0.8rem;
+.subdomain-dialog .finding-dialog-meta-row {
+  row-gap: 0.5rem;
 }
 
 .subdomain-tech-section h3 {
@@ -847,6 +842,11 @@ button,
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
+}
+
+.subdomain-tech-empty {
+  color: var(--app-text-soft);
+  font-size: 0.9rem;
 }
 
 .subdomain-tech-tag {
