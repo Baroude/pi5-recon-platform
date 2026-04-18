@@ -370,9 +370,11 @@
           <td>${formatNumber(target.finding_open_count)}</td>
           <td><span data-rel-ts="${escapeHtml(target.last_recon || "")}">${escapeHtml(relTs(target.last_recon))}</span></td>
           <td><span data-rel-ts="${escapeHtml(target.next_recon_due_at || "")}">${escapeHtml(relTs(target.next_recon_due_at))}</span></td>
-          <td class="table-actions">
-            <a href="${findingsHref}" role="button" class="secondary">Open findings</a>
-            <a href="/ui/targets.html" role="button" class="contrast">Manage</a>
+          <td>
+            <div class="target-actions">
+              <a href="${findingsHref}" role="button" class="secondary">Open findings</a>
+              <a href="/ui/targets.html" role="button" class="outline contrast">Manage</a>
+            </div>
           </td>
         </tr>
       `;
@@ -485,8 +487,8 @@
           <td>${escapeHtml(finding.scope_root)}</td>
           <td>${findingStatusPill(finding.status)}</td>
           <td>
-            <div class="table-actions compact">
-              <button type="button" class="contrast" data-action="triaged" data-finding-id="${finding.id}">Triage</button>
+            <div class="target-actions">
+              <button type="button" class="outline contrast" data-action="triaged" data-finding-id="${finding.id}">Triage</button>
               <button type="button" class="secondary" data-action="false_positive" data-finding-id="${finding.id}">FP</button>
               <button type="button" class="secondary" data-action="fixed" data-finding-id="${finding.id}">Fixed</button>
             </div>
@@ -908,8 +910,8 @@
           <article class="payload-card">
             <div class="payload-card-header">
               <div class="muted">Authoritative raw payload key</div>
-              <div class="table-actions">
-                <button type="button" class="contrast" data-dlq-action="requeue" data-queue="${queue.queueName}" data-raw="${escapeHtml(entry.raw)}">Requeue</button>
+              <div class="target-actions">
+                <button type="button" class="outline contrast" data-dlq-action="requeue" data-queue="${queue.queueName}" data-raw="${escapeHtml(entry.raw)}">Requeue</button>
                 <button type="button" class="secondary" data-dlq-action="dismiss" data-queue="${queue.queueName}" data-raw="${escapeHtml(entry.raw)}">Dismiss</button>
               </div>
             </div>

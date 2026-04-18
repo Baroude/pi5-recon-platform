@@ -572,10 +572,6 @@ main {
   flex-shrink: 0;
 }
 
-.filter-apply-row button {
-  margin: 0;
-}
-
 .inline-form label {
   margin-bottom: 0;
 }
@@ -625,40 +621,26 @@ td code,
   font-size: 0.86rem;
 }
 
-.table-actions {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-}
-
-.table-actions.compact {
-  display: grid;
-  grid-template-columns: auto auto;
-  gap: 0.25rem;
-  justify-content: start;
-}
-
-.table-actions button,
-.table-actions a {
+/* Global compact buttons — same sizing as target action row everywhere */
+button,
+[role="button"] {
   width: auto;
-  margin-bottom: 0;
-}
-
-.table-actions.compact button,
-.table-actions.compact a {
-  min-height: 1.9rem;
-  padding: 0.3rem 0.6rem;
-  font-size: 0.8rem;
+  min-height: 1.85rem;
+  padding: 0.28rem 0.65rem;
+  font-size: 0.82rem;
+  margin: 0;
   white-space: nowrap;
-  justify-content: center;
-  text-align: center;
 }
 
-.table-actions.compact > :last-child:nth-child(odd) {
-  justify-self: start;
+/* Create-target CTA stays full-width */
+.toolbar-actions > button[type="submit"] {
+  width: 100%;
+  min-height: 2.4rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
 }
 
+.table-actions,
 .target-actions {
   display: flex;
   align-items: center;
@@ -672,16 +654,6 @@ td code,
   background: var(--app-border-strong);
   flex-shrink: 0;
   margin: 0 0.1rem;
-}
-
-.target-actions button,
-.target-actions a {
-  width: auto;
-  margin: 0;
-  min-height: 1.85rem;
-  padding: 0.28rem 0.6rem;
-  font-size: 0.8rem;
-  white-space: nowrap;
 }
 
 .message {
@@ -950,13 +922,9 @@ details.accordion summary::-webkit-details-marker {
     grid-template-columns: 1fr;
   }
 
-  .table-actions {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .table-actions.compact {
-    grid-template-columns: 1fr 1fr;
+  .table-actions,
+  .target-actions {
+    flex-wrap: wrap;
   }
 }
 
