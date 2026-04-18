@@ -169,7 +169,8 @@ main {
 .page-header-copy {
   display: grid;
   gap: 0.35rem;
-  max-width: 56rem;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .page-header-actions {
@@ -178,6 +179,7 @@ main {
   justify-content: flex-end;
   gap: 0.65rem;
   flex-wrap: wrap;
+  flex-shrink: 0;
 }
 
 .page-section {
@@ -527,6 +529,15 @@ td code,
   white-space: nowrap;
   justify-content: center;
   text-align: center;
+}
+
+.table-actions.compact > :last-child:nth-child(odd) {
+  justify-self: start;
+}
+
+.filters select[multiple] {
+  max-height: 5.5rem;
+  min-height: 0;
 }
 
 .message {

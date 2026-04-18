@@ -485,9 +485,9 @@
           <td>${escapeHtml(finding.scope_root)}</td>
           <td>${findingStatusPill(finding.status)}</td>
           <td>
-            <div class="table-actions">
-              <button type="button" class="contrast" data-action="triaged" data-finding-id="${finding.id}">Triaged</button>
-              <button type="button" class="secondary" data-action="false_positive" data-finding-id="${finding.id}">False+</button>
+            <div class="table-actions compact">
+              <button type="button" class="contrast" data-action="triaged" data-finding-id="${finding.id}">Triage</button>
+              <button type="button" class="secondary" data-action="false_positive" data-finding-id="${finding.id}">FP</button>
               <button type="button" class="secondary" data-action="fixed" data-finding-id="${finding.id}">Fixed</button>
             </div>
           </td>
@@ -677,7 +677,7 @@
           <td>
             <div class="table-actions compact">
               <button type="button" class="contrast" data-edit='${escapeHtml(JSON.stringify(target))}'>Edit</button>
-              <button type="button" class="secondary" data-run="${target.id}">Run now</button>
+              <button type="button" class="secondary" data-run="${target.id}">Run</button>
               ${target.enabled ? `<button type="button" class="secondary" data-stop="${target.id}" data-name="${escapeHtml(target.scope_root)}">Stop</button>` : ""}
               <button type="button" class="secondary" data-disable="${target.id}" data-name="${escapeHtml(target.scope_root)}">Disable</button>
               <button type="button" class="outline danger" data-delete="${target.id}" data-name="${escapeHtml(target.scope_root)}">Delete</button>
