@@ -649,7 +649,11 @@ def test_shared_refresh_shell(client, path, data_page):
     assert '/ui/app.css' in html
     assert '/ui/app.js' in html
     assert 'class="topbar"' in html
-    assert 'class="page-header panel"' in html
+    header_match = re.search(r'<section\b[^>]*class="([^"]+)"[^>]*>\s*<div class="page-header-copy">', html, re.S)
+    assert header_match is not None
+    header_tokens = set(header_match.group(1).split())
+    assert "page-header" in header_tokens
+    assert "panel" in header_tokens
     assert 'class="page-header-copy"' in html
     assert 'class="page-header-actions"' in html
     assert len(current_links) == 1
@@ -677,47 +681,80 @@ def test_refresh_tokens_and_layout_hooks(client):
 
 
 @pytest.mark.parametrize(
-    "path, markers",
+    "path",
     [
-        (
-            "/ui/index.html",
-            [
-                'id="overview-cards" class="card-grid"',
-                'class="panel page-section"',
-                'id="dashboard-targets-body"',
-            ],
-        ),
-        (
-            "/ui/findings.html",
-            [
-                'class="filters compact filters-toolbar"',
-                'class="panel page-section finding-detail inspector-panel"',
-                'id="findings-body"',
-            ],
-        ),
-        (
-            "/ui/targets.html",
-            [
-                'class="panel page-section form-panel"',
-                'id="targets-body"',
-                'class="target-dialog inspector-panel"',
-            ],
-        ),
-        (
-            "/ui/ops.html",
-            [
-                'id="dlq-list" class="accordion-list"',
-                'id="failed-jobs-body"',
-                'class="panel page-section"',
-            ],
-        ),
+        "/ui/index.html",
+        "/ui/findings.html",
+        "/ui/targets.html",
+        "/ui/ops.html",
     ],
 )
-def test_dense_layout_hooks(client, path, markers):
+def test_dense_layout_hooks(client, path):
     test_client, _, _, _ = client
     res = test_client.get(path)
     assert res.status_code == 200
 
     html = res.text
-    for marker in markers:
-        assert marker in html
+
+    if path == "/ui/index.html":
+        section_match = re.search(r'<section\b[^>]*class="([^"]+)"[^>]*>\s*<div class="page-header-copy">', html, re.S)
+        assert section_match is not None
+        tokens = set(section_match.group(1).split())
+        assert "page-header" in tokens
+        assert "panel" in tokens
+        assert "page-section" in tokens
+
+        overview_match = re.search(r'<section\b[^>]*id="overview-cards"[^>]*class="([^"]+)"[^>]*>', html)
+        assert overview_match is not None
+        assert set(overview_match.group(1).split()) == {"card-grid"}
+
+        targets_match = re.search(r'<tbody\b[^>]*id="dashboard-targets-body"[^>]*>', html)
+        assert targets_match is not None
+    elif path == "/ui/findings.html":
+        form_match = re.search(r'<form\b[^>]*id="findings-filters"[^>]*class="([^"]+)"[^>]*>', html)
+        assert form_match is not None
+        form_tokens = set(form_match.group(1).split())
+        assert {"filters", "compact", "filters-toolbar"} <= form_tokens
+
+        action_match = re.search(r'<div\b[^>]*class="([^"]+)"[^>]*>\s*<button type="submit">Apply</button>', html, re.S)
+        assert action_match is not None
+        action_tokens = set(action_match.group(1).split())
+        assert {"toolbar-actions", "table-actions", "compact"} <= action_tokens
+
+        aside_match = re.search(r'<aside\b[^>]*id="finding-detail"[^>]*class="([^"]+)"[^>]*>', html)
+        assert aside_match is not None
+        aside_tokens = set(aside_match.group(1).split())
+        assert {"panel", "page-section", "finding-detail", "inspector-panel"} <= aside_tokens
+
+        body_match = re.search(r'<tbody\b[^>]*id="findings-body"[^>]*>', html)
+        assert body_match is not None
+    elif path == "/ui/targets.html":
+        create_match = re.search(r'<details\b[^>]*class="([^"]+)"[^>]*>\s*<summary><strong>Create target</strong></summary>', html, re.S)
+        assert create_match is not None
+        create_tokens = set(create_match.group(1).split())
+        assert {"panel", "page-section", "form-panel"} <= create_tokens
+
+        target_dialogs = {
+            "target-dialog": False,
+            "confirm-delete-dialog": False,
+        }
+        for dialog_match in re.finditer(r'<dialog\b[^>]*id="([^"]+)"[^>]*class="([^"]+)"[^>]*>', html):
+            dialog_id = dialog_match.group(1)
+            if dialog_id in target_dialogs:
+                tokens = set(dialog_match.group(2).split())
+                assert {"target-dialog", "inspector-panel"} <= tokens
+                target_dialogs[dialog_id] = True
+        assert all(target_dialogs.values())
+
+        body_match = re.search(r'<tbody\b[^>]*id="targets-body"[^>]*>', html)
+        assert body_match is not None
+    elif path == "/ui/ops.html":
+        section_matches = re.findall(r'<section\b[^>]*class="([^"]+)"[^>]*>', html)
+        assert any({"panel", "page-section"} <= set(tokens.split()) for tokens in section_matches)
+
+        dlq_match = re.search(r'<div\b[^>]*id="dlq-list"[^>]*class="([^"]+)"[^>]*>', html)
+        assert dlq_match is not None
+        assert set(dlq_match.group(1).split()) == {"accordion-list"}
+
+        failed_jobs_match = re.search(r'<tbody\b[^>]*id="failed-jobs-body"[^>]*>', html)
+        assert failed_jobs_match is not None
