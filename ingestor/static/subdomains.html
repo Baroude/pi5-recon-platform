@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recon Platform | Subdomains</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="/ui/app.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body data-page="subdomains">
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="/ui/index.html">
+          <span class="brand-mark">R</span>
+          <span>Recon</span>
+        </a>
+        <nav class="nav-links" aria-label="Primary">
+          <a href="/ui/index.html">Dashboard</a>
+          <a href="/ui/findings.html">Findings</a>
+          <a class="is-active" href="/ui/subdomains.html" aria-current="page">Subdomains</a>
+          <a href="/ui/targets.html">Targets</a>
+          <a href="/ui/ops.html">Ops</a>
+        </nav>
+        <div class="status-meta">
+          <span class="status-dot good"></span>
+          <span id="last-updated">Waiting for data</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div id="page-message" class="message" role="status" aria-live="polite"></div>
+      <div id="stale-banner" class="message error stale-banner" role="alert"></div>
+
+      <section class="page-header panel">
+        <div class="page-header-copy">
+          <h1>Global hostname inventory</h1>
+          <p>Every discovered hostname in one place, with server-side filters for target, status, technologies, and last-seen activity.</p>
+        </div>
+        <div class="page-header-actions">
+          <a href="/ui/targets.html" role="button" class="secondary">Manage targets</a>
+          <a href="/ui/findings.html?status=open" role="button">Review findings</a>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Filters</h2>
+            <p>Filters update the URL so inventory views stay linkable across the dashboard.</p>
+          </div>
+          <div class="panel-meta" id="subdomains-count">0 visible</div>
+        </div>
+
+        <form id="subdomains-filters" class="filters filters-bar compact filters-toolbar">
+          <div class="filter-row filter-selects-row">
+            <label class="filter-select-wrap">
+              Target
+              <select id="subdomains-filter-target"></select>
+            </label>
+            <label class="filter-select-wrap">
+              Status
+              <select id="subdomains-filter-status">
+                <option value="">All statuses</option>
+                <option value="online">online</option>
+                <option value="offline">offline</option>
+              </select>
+            </label>
+            <label class="filter-select-wrap">
+              Technology
+              <input id="subdomains-filter-technology" type="search" placeholder="wordpress">
+            </label>
+            <label class="filter-select-wrap subdomains-search-wrap">
+              Hostname search
+              <input id="subdomains-filter-search" type="search" placeholder="api.example.com">
+            </label>
+            <label class="filter-select-wrap">
+              Sort field
+              <select id="subdomains-filter-sort-by">
+                <option value="last_seen">Last seen</option>
+                <option value="hostname">Hostname</option>
+                <option value="status">Status</option>
+                <option value="scope_root">Target</option>
+              </select>
+            </label>
+            <label class="filter-select-wrap">
+              Sort direction
+              <select id="subdomains-filter-sort-dir">
+                <option value="desc">Descending</option>
+                <option value="asc">Ascending</option>
+              </select>
+            </label>
+            <div class="filter-apply-row toolbar-actions table-actions compact">
+              <button type="submit">Apply</button>
+              <button type="button" id="subdomains-reset" class="secondary">Reset</button>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel page-section">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Hostname inventory</h2>
+            <p>One row per hostname. Technology tags stay in the detail panel to keep the table scannable.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Hostname</th>
+                <th>Target</th>
+                <th>Status</th>
+                <th>Last seen</th>
+                <th>Endpoints</th>
+              </tr>
+            </thead>
+            <tbody id="subdomains-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel page-section subdomain-detail-panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Hostname detail</h2>
+            <p>Selection stays subdomain-centered and rolls endpoint activity into a compact summary.</p>
+          </div>
+        </div>
+        <div id="subdomain-detail-content" class="subdomain-detail-content">
+          <div class="empty-state">Select a hostname row to inspect its scope, endpoint counts, and aggregated technologies.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

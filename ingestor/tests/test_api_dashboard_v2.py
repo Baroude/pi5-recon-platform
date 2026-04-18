@@ -158,17 +158,112 @@ def _insert_target(
         ).lastrowid
 
 
-def _insert_endpoint(ingestor_app, target_id, hostname):
+def _insert_subdomain(
+    ingestor_app,
+    target_id,
+    hostname,
+    *,
+    source="seed",
+    first_seen=None,
+    last_seen=None,
+):
     with ingestor_app.db_conn() as conn:
-        subdomain_id = conn.execute(
-            "INSERT INTO subdomains (target_id, hostname, source) VALUES (?, ?, ?)",
-            (target_id, hostname, "seed"),
-        ).lastrowid
-        endpoint_id = conn.execute(
-            "INSERT INTO endpoints (subdomain_id, url, host, alive) VALUES (?, ?, ?, 1)",
-            (subdomain_id, f"https://{hostname}", hostname),
-        ).lastrowid
+        if first_seen or last_seen:
+            subdomain_id = conn.execute(
+                """
+                INSERT INTO subdomains (target_id, hostname, source, first_seen, last_seen)
+                VALUES (?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')))
+                """,
+                (target_id, hostname, source, first_seen, last_seen),
+            ).lastrowid
+        else:
+            subdomain_id = conn.execute(
+                "INSERT INTO subdomains (target_id, hostname, source) VALUES (?, ?, ?)",
+                (target_id, hostname, source),
+            ).lastrowid
+    return subdomain_id
+
+
+def _insert_endpoint_for_subdomain(
+    ingestor_app,
+    subdomain_id,
+    hostname,
+    *,
+    url=None,
+    alive=1,
+    technologies=None,
+    first_seen=None,
+    last_seen=None,
+):
+    technologies_value = technologies
+    if isinstance(technologies, (list, tuple)):
+        technologies_value = json.dumps(list(technologies))
+
+    with ingestor_app.db_conn() as conn:
+        if any(value is not None for value in (technologies_value, first_seen, last_seen)) or alive != 1:
+            endpoint_id = conn.execute(
+                """
+                INSERT INTO endpoints (
+                    subdomain_id, url, host, alive, technologies, first_seen, last_seen
+                )
+                VALUES (
+                    ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now'))
+                )
+                """,
+                (
+                    subdomain_id,
+                    url or f"https://{hostname}",
+                    hostname,
+                    alive,
+                    technologies_value,
+                    first_seen,
+                    last_seen,
+                ),
+            ).lastrowid
+        else:
+            endpoint_id = conn.execute(
+                "INSERT INTO endpoints (subdomain_id, url, host, alive) VALUES (?, ?, ?, 1)",
+                (subdomain_id, url or f"https://{hostname}", hostname),
+            ).lastrowid
     return endpoint_id
+
+
+def _insert_subdomain_with_endpoints(
+    ingestor_app,
+    target_id,
+    hostname,
+    *,
+    source="seed",
+    first_seen=None,
+    last_seen=None,
+    endpoints=None,
+):
+    subdomain_id = _insert_subdomain(
+        ingestor_app,
+        target_id,
+        hostname,
+        source=source,
+        first_seen=first_seen,
+        last_seen=last_seen,
+    )
+    endpoint_ids = []
+    for index, endpoint in enumerate(endpoints or [], start=1):
+        endpoint_payload = dict(endpoint)
+        endpoint_payload.setdefault("url", f"https://{hostname}/endpoint-{index}")
+        endpoint_ids.append(
+            _insert_endpoint_for_subdomain(
+                ingestor_app,
+                subdomain_id,
+                hostname,
+                **endpoint_payload,
+            )
+        )
+    return subdomain_id, endpoint_ids
+
+
+def _insert_endpoint(ingestor_app, target_id, hostname):
+    subdomain_id = _insert_subdomain(ingestor_app, target_id, hostname)
+    return _insert_endpoint_for_subdomain(ingestor_app, subdomain_id, hostname)
 
 
 def _insert_finding(ingestor_app, endpoint_id, template_id="test-tpl", raw_blob_path=None):
@@ -417,6 +512,221 @@ def test_patch_finding_rejects_invalid_status(client):
 
     patch_res = test_client.patch(f"/findings/{finding_id}", json={"status": "ignored"})
     assert patch_res.status_code == 400
+
+
+def test_subdomains_returns_hostname_rollups(client):
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="alpha.example.com")
+    _insert_subdomain_with_endpoints(
+        ingestor_app,
+        target_id,
+        "app.alpha.example.com",
+        source="recon",
+        endpoints=[
+            {
+                "url": "https://app.alpha.example.com",
+                "alive": 1,
+                "technologies": ["WordPress", "nginx"],
+                "last_seen": "2026-04-18 09:00:00",
+            },
+            {
+                "url": "https://app.alpha.example.com:8443",
+                "alive": 0,
+                "technologies": ["wordpress", "PHP"],
+                "last_seen": "2026-04-18 11:00:00",
+            },
+        ],
+    )
+
+    res = test_client.get("/subdomains?limit=50")
+    assert res.status_code == 200
+    rows = res.json()
+
+    row = next(item for item in rows if item["hostname"] == "app.alpha.example.com")
+    assert row["target_id"] == target_id
+    assert row["scope_root"] == "alpha.example.com"
+    assert row["status"] == "online"
+    assert row["endpoint_count"] == 2
+    assert row["alive_endpoint_count"] == 1
+    assert row["technology_tags"] == ["nginx", "php", "wordpress"]
+    assert row["source"] == "recon"
+    assert row["last_seen"] == "2026-04-18 11:00:00"
+
+
+def test_subdomains_filter_by_target_id(client):
+    test_client, ingestor_app, _, _ = client
+    alpha_target_id = _insert_target(ingestor_app, scope_root="alpha.example.com")
+    beta_target_id = _insert_target(ingestor_app, scope_root="beta.example.com")
+    _insert_subdomain_with_endpoints(ingestor_app, alpha_target_id, "api.alpha.example.com", endpoints=[{}])
+    _insert_subdomain_with_endpoints(ingestor_app, beta_target_id, "api.beta.example.com", endpoints=[{}])
+
+    res = test_client.get(f"/subdomains?target_id={beta_target_id}&limit=50")
+    assert res.status_code == 200
+    rows = res.json()
+
+    assert [row["hostname"] for row in rows] == ["api.beta.example.com"]
+    assert all(row["target_id"] == beta_target_id for row in rows)
+
+
+def test_subdomains_filter_by_status(client):
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="status.example.com")
+    _insert_subdomain_with_endpoints(
+        ingestor_app,
+        target_id,
+        "up.status.example.com",
+        endpoints=[{"alive": 1}],
+    )
+    _insert_subdomain_with_endpoints(
+        ingestor_app,
+        target_id,
+        "down.status.example.com",
+        endpoints=[{"alive": 0}],
+    )
+
+    online_res = test_client.get("/subdomains?status=online&limit=50")
+    offline_res = test_client.get("/subdomains?status=offline&limit=50")
+
+    assert online_res.status_code == 200
+    assert offline_res.status_code == 200
+    assert [row["hostname"] for row in online_res.json()] == ["up.status.example.com"]
+    assert [row["hostname"] for row in offline_res.json()] == ["down.status.example.com"]
+
+
+def test_subdomains_filter_by_technology_case_insensitive(client):
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="tech.example.com")
+    _insert_subdomain_with_endpoints(
+        ingestor_app,
+        target_id,
+        "blog.tech.example.com",
+        endpoints=[{"technologies": ["WordPress", "PHP"]}],
+    )
+    _insert_subdomain_with_endpoints(
+        ingestor_app,
+        target_id,
+        "static.tech.example.com",
+        endpoints=[{"technologies": ["nginx"]}],
+    )
+
+    res = test_client.get("/subdomains?technology=wordpress&limit=50")
+    assert res.status_code == 200
+    assert [row["hostname"] for row in res.json()] == ["blog.tech.example.com"]
+
+
+def test_subdomains_filter_by_search_substring(client):
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="search.example.com")
+    _insert_subdomain_with_endpoints(ingestor_app, target_id, "shop.search.example.com", endpoints=[{}])
+    _insert_subdomain_with_endpoints(ingestor_app, target_id, "api.search.example.com", endpoints=[{}])
+
+    res = test_client.get("/subdomains?search=shop&limit=50")
+    assert res.status_code == 200
+    assert [row["hostname"] for row in res.json()] == ["shop.search.example.com"]
+
+
+def test_subdomains_sort_by_hostname(client):
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="sort-hostname.example.com")
+    _insert_subdomain_with_endpoints(ingestor_app, target_id, "zulu.sort-hostname.example.com", endpoints=[{}])
+    _insert_subdomain_with_endpoints(ingestor_app, target_id, "alpha.sort-hostname.example.com", endpoints=[{}])
+
+    res = test_client.get("/subdomains?sort_by=hostname&sort_dir=asc&limit=50")
+    assert res.status_code == 200
+    assert [row["hostname"] for row in res.json()] == [
+        "alpha.sort-hostname.example.com",
+        "zulu.sort-hostname.example.com",
+    ]
+
+
+def test_subdomains_sort_by_last_seen(client):
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="sort-last-seen.example.com")
+    _insert_subdomain_with_endpoints(
+        ingestor_app,
+        target_id,
+        "older.sort-last-seen.example.com",
+        endpoints=[{"last_seen": "2026-04-18 08:00:00"}],
+    )
+    _insert_subdomain_with_endpoints(
+        ingestor_app,
+        target_id,
+        "newer.sort-last-seen.example.com",
+        endpoints=[{"last_seen": "2026-04-18 12:00:00"}],
+    )
+
+    res = test_client.get("/subdomains?sort_by=last_seen&sort_dir=desc&limit=50")
+    assert res.status_code == 200
+    assert [row["hostname"] for row in res.json()] == [
+        "newer.sort-last-seen.example.com",
+        "older.sort-last-seen.example.com",
+    ]
+
+
+def test_subdomains_sort_by_status(client):
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="sort-status.example.com")
+    _insert_subdomain_with_endpoints(
+        ingestor_app,
+        target_id,
+        "offline.sort-status.example.com",
+        endpoints=[{"alive": 0}],
+    )
+    _insert_subdomain_with_endpoints(
+        ingestor_app,
+        target_id,
+        "online.sort-status.example.com",
+        endpoints=[{"alive": 1}],
+    )
+
+    res = test_client.get("/subdomains?sort_by=status&sort_dir=desc&limit=50")
+    assert res.status_code == 200
+    assert [row["hostname"] for row in res.json()] == [
+        "online.sort-status.example.com",
+        "offline.sort-status.example.com",
+    ]
+
+
+def test_subdomains_without_endpoints_still_appear_offline(client):
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="no-endpoints.example.com")
+    _insert_subdomain(
+        ingestor_app,
+        target_id,
+        "empty.no-endpoints.example.com",
+        source="brute",
+        last_seen="2026-04-18 07:00:00",
+    )
+
+    res = test_client.get("/subdomains?limit=50")
+    assert res.status_code == 200
+    row = next(item for item in res.json() if item["hostname"] == "empty.no-endpoints.example.com")
+
+    assert row["status"] == "offline"
+    assert row["endpoint_count"] == 0
+    assert row["alive_endpoint_count"] == 0
+    assert row["technology_tags"] == []
+    assert row["source"] == "brute"
+    assert row["last_seen"] == "2026-04-18 07:00:00"
+
+
+def test_subdomains_ignore_malformed_technology_json(client):
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="bad-tech.example.com")
+    _insert_subdomain_with_endpoints(
+        ingestor_app,
+        target_id,
+        "app.bad-tech.example.com",
+        endpoints=[
+            {"technologies": "["},
+            {"technologies": ["nginx"]},
+        ],
+    )
+
+    res = test_client.get("/subdomains?limit=50")
+    assert res.status_code == 200
+    row = next(item for item in res.json() if item["hostname"] == "app.bad-tech.example.com")
+    assert row["technology_tags"] == ["nginx"]
 
 
 def test_admin_dlq_returns_raw_and_payload_and_supports_requeue(client):

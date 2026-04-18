@@ -243,12 +243,47 @@ Response includes:
 
 ### GET `/subdomains`
 
-List subdomains.
+List hostname-level subdomain inventory rows.
 
 Query:
 
 - `target_id` (optional)
+- `status` (optional: `online|offline`)
+- `technology` (optional, case-insensitive exact match against aggregated technology tags)
+- `search` (optional hostname substring match, case-insensitive)
+- `sort_by` (optional: `hostname|last_seen|status|scope_root`, default `last_seen`)
+- `sort_dir` (optional: `asc|desc`, default `desc`)
+- `offset` (optional, default `0`)
 - `limit` (default `100`, max `1000`)
+
+Response rows are still one row per discovered subdomain hostname, not one row per endpoint.
+Each row rolls endpoint data up onto the hostname:
+
+- `status` is `online` when any endpoint under the hostname has `alive = 1`, otherwise `offline`
+- `endpoint_count` is the total number of endpoints under the hostname
+- `alive_endpoint_count` is the number of endpoints with `alive = 1`
+- `technology_tags` is the deduplicated, lower-cased set of endpoint technologies for the hostname
+- `last_seen` is the most recent endpoint `last_seen` when endpoints exist, otherwise the subdomain row `last_seen`
+
+Response shape:
+
+```json
+[
+  {
+    "id": 12,
+    "target_id": 3,
+    "hostname": "app.example.com",
+    "source": "recon",
+    "first_seen": "2026-04-18 08:00:00",
+    "last_seen": "2026-04-18 11:00:00",
+    "scope_root": "example.com",
+    "status": "online",
+    "endpoint_count": 2,
+    "alive_endpoint_count": 1,
+    "technology_tags": ["nginx", "php", "wordpress"]
+  }
+]
+```
 
 ## Health
 

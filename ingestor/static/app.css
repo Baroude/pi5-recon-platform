@@ -409,6 +409,7 @@ main {
 .status-pill.fixed,
 .status-pill.pending,
 .status-pill.running,
+.status-pill.online,
 .health-pill.stale,
 .queue-pill.warn,
 .severity-pill.medium,
@@ -420,6 +421,7 @@ main {
 
 .status-pill.false_positive,
 .status-pill.failed,
+.status-pill.offline,
 .health-pill.offline,
 .queue-pill.bad,
 .severity-pill.high,
@@ -556,6 +558,11 @@ main {
   margin: 0;
 }
 
+.subdomains-search-wrap {
+  min-width: 220px;
+  max-width: 320px;
+}
+
 .filter-apply-row {
   display: flex;
   align-items: flex-end;
@@ -599,6 +606,14 @@ table tbody tr.clickable:hover {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.subdomain-row.is-selected {
+  background: rgba(127, 185, 255, 0.08);
+}
+
+.subdomain-row.is-selected td {
+  box-shadow: inset 0 1px 0 rgba(127, 185, 255, 0.18), inset 0 -1px 0 rgba(127, 185, 255, 0.18);
+}
+
 #findings-body td:nth-child(2) {
   max-width: 220px;
   white-space: nowrap;
@@ -637,6 +652,10 @@ button,
   align-items: center;
   gap: 0.3rem;
   flex-wrap: nowrap;
+}
+
+.table-actions.compact {
+  gap: 0.3rem;
 }
 
 .target-actions-sep {
@@ -790,6 +809,56 @@ button,
   padding: 1.4rem 1.6rem;
   overflow-y: auto;
   flex: 1;
+}
+
+.subdomain-detail-content {
+  display: grid;
+  gap: 1rem;
+}
+
+.subdomain-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.subdomain-detail-title {
+  margin: 0;
+  font-size: clamp(1.05rem, 2vw, 1.3rem);
+  word-break: break-word;
+}
+
+.subdomain-detail-panel .panel-header {
+  margin-bottom: 0.8rem;
+}
+
+.subdomain-tech-section h3 {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--app-text-soft);
+  margin: 0 0 0.55rem;
+  font-weight: 600;
+}
+
+.subdomain-tech-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.subdomain-tech-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  background: var(--app-accent-soft);
+  border: 1px solid rgba(127, 185, 255, 0.22);
+  color: #dceeff;
+  font-size: 0.8rem;
+  line-height: 1.35;
 }
 
 .finding-fields {

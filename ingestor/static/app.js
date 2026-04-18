@@ -136,6 +136,11 @@
     return statusPill(labels[status] || status, "queue-pill", status);
   }
 
+  function subdomainStatusPill(status) {
+    const value = (status || "offline").toLowerCase();
+    return statusPill(value, "status-pill", value);
+  }
+
   function buildWorkerRows(recentJobs = []) {
     const grouped = new Map();
     recentJobs.forEach((job) => {
@@ -642,6 +647,234 @@
     });
   }
 
+  function initSubdomains() {
+    const message = $("#page-message");
+    const staleBanner = $("#stale-banner");
+    const updatedAt = $("#last-updated");
+    const filtersForm = $("#subdomains-filters");
+    const targetSelect = $("#subdomains-filter-target");
+    const statusSelect = $("#subdomains-filter-status");
+    const technologyInput = $("#subdomains-filter-technology");
+    const searchInput = $("#subdomains-filter-search");
+    const sortBySelect = $("#subdomains-filter-sort-by");
+    const sortDirSelect = $("#subdomains-filter-sort-dir");
+    const tbody = $("#subdomains-body");
+    const detailContent = $("#subdomain-detail-content");
+
+    const query = new URLSearchParams(window.location.search);
+    const state = {
+      targets: [],
+      rows: [],
+      selectedId: null,
+      filters: {
+        targetId: query.get("target_id") || "",
+        status: query.get("status") || "",
+        technology: query.get("technology") || "",
+        search: query.get("search") || "",
+        sortBy: query.get("sort_by") || "last_seen",
+        sortDir: query.get("sort_dir") || "desc",
+      },
+    };
+
+    function syncControls() {
+      renderTargetOptions(targetSelect, state.targets, state.filters.targetId);
+      statusSelect.value = state.filters.status;
+      technologyInput.value = state.filters.technology;
+      searchInput.value = state.filters.search;
+      sortBySelect.value = state.filters.sortBy;
+      sortDirSelect.value = state.filters.sortDir;
+    }
+
+    function syncUrl() {
+      const next = new URLSearchParams();
+      if (state.filters.targetId) next.set("target_id", state.filters.targetId);
+      if (state.filters.status) next.set("status", state.filters.status);
+      if (state.filters.technology) next.set("technology", state.filters.technology);
+      if (state.filters.search) next.set("search", state.filters.search);
+      if (state.filters.sortBy !== "last_seen") next.set("sort_by", state.filters.sortBy);
+      if (state.filters.sortDir !== "desc") next.set("sort_dir", state.filters.sortDir);
+      const nextUrl = `${window.location.pathname}${next.toString() ? `?${next.toString()}` : ""}`;
+      window.history.replaceState({}, "", nextUrl);
+    }
+
+    function readFiltersFromControls() {
+      state.filters.targetId = targetSelect.value;
+      state.filters.status = statusSelect.value;
+      state.filters.technology = technologyInput.value.trim();
+      state.filters.search = searchInput.value.trim();
+      state.filters.sortBy = sortBySelect.value;
+      state.filters.sortDir = sortDirSelect.value;
+    }
+
+    async function loadTargets() {
+      state.targets = await api("/targets");
+      syncControls();
+    }
+
+    async function loadSubdomains() {
+      const params = {
+        target_id: state.filters.targetId,
+        status: state.filters.status,
+        technology: state.filters.technology,
+        search: state.filters.search,
+        sort_by: state.filters.sortBy,
+        sort_dir: state.filters.sortDir,
+        limit: "500",
+      };
+      state.rows = await api(`/subdomains${buildQuery(params)}`);
+      renderSubdomainsTable();
+
+      if (!state.rows.length) {
+        state.selectedId = null;
+        renderSubdomainDetail(null);
+        return;
+      }
+
+      const selectedRow = state.rows.find((row) => row.id === state.selectedId) || state.rows[0];
+      state.selectedId = selectedRow.id;
+      renderSubdomainDetail(selectedRow);
+    }
+
+    function renderSubdomainsTable() {
+      $("#subdomains-count").textContent = `${state.rows.length} visible`;
+      if (!state.rows.length) {
+        tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state">No hostnames match the current filters.</div></td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = state.rows.map((row) => `
+        <tr class="clickable subdomain-row ${row.id === state.selectedId ? "is-selected" : ""}" data-subdomain-row="${row.id}">
+          <td>
+            <strong>${escapeHtml(row.hostname)}</strong>
+            <div class="muted">${escapeHtml(row.source || "source unknown")}</div>
+          </td>
+          <td>${escapeHtml(row.scope_root)}</td>
+          <td>${subdomainStatusPill(row.status)}</td>
+          <td><span data-rel-ts="${escapeHtml(row.last_seen || "")}">${escapeHtml(relTs(row.last_seen))}</span></td>
+          <td>${formatNumber(row.endpoint_count)}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderSubdomainDetail(row) {
+      if (!row) {
+        detailContent.innerHTML = '<div class="empty-state">Select a hostname row to inspect its scope, endpoint counts, and aggregated technologies.</div>';
+        return;
+      }
+
+      const technologyTags = (row.technology_tags || []).length
+        ? row.technology_tags.map((tag) => `<span class="subdomain-tech-tag">${escapeHtml(tag)}</span>`).join("")
+        : '<span class="muted">No technologies recorded.</span>';
+
+      detailContent.innerHTML = `
+        <div class="subdomain-detail-header">
+          <div>
+            <div class="eyebrow">Hostname Detail</div>
+            <h3 class="subdomain-detail-title">${escapeHtml(row.hostname)}</h3>
+          </div>
+          <div class="finding-dialog-pills">
+            ${subdomainStatusPill(row.status)}
+          </div>
+        </div>
+        <div class="finding-fields">
+          <div class="finding-field">
+            <div class="finding-field-label">Target</div>
+            <div class="finding-field-value">${escapeHtml(row.scope_root || "-")}</div>
+          </div>
+          <div class="finding-field">
+            <div class="finding-field-label">Source</div>
+            <div class="finding-field-value">${escapeHtml(row.source || "-")}</div>
+          </div>
+          <div class="finding-field">
+            <div class="finding-field-label">First seen</div>
+            <div class="finding-field-value">${escapeHtml(fmtTs(row.first_seen))}</div>
+          </div>
+          <div class="finding-field">
+            <div class="finding-field-label">Last seen</div>
+            <div class="finding-field-value">${escapeHtml(fmtTs(row.last_seen))}</div>
+          </div>
+          <div class="finding-field">
+            <div class="finding-field-label">Endpoint count</div>
+            <div class="finding-field-value">${formatNumber(row.endpoint_count)}</div>
+          </div>
+          <div class="finding-field">
+            <div class="finding-field-label">Alive endpoints</div>
+            <div class="finding-field-value">${formatNumber(row.alive_endpoint_count)}</div>
+          </div>
+        </div>
+        <div class="subdomain-tech-section">
+          <h3>Technology tags</h3>
+          <div class="subdomain-tech-list">${technologyTags}</div>
+        </div>
+      `;
+    }
+
+    async function applyFilters() {
+      readFiltersFromControls();
+      syncUrl();
+      await loadSubdomains();
+      applyRelativeTimestamps();
+    }
+
+    filtersForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await applyFilters();
+    });
+
+    filtersForm.addEventListener("change", async () => {
+      await applyFilters();
+    });
+
+    tbody.addEventListener("click", (event) => {
+      const row = event.target.closest("tr[data-subdomain-row]");
+      if (!row) return;
+      state.selectedId = Number(row.dataset.subdomainRow);
+      renderSubdomainsTable();
+      renderSubdomainDetail(state.rows.find((item) => item.id === state.selectedId) || null);
+      applyRelativeTimestamps();
+    });
+
+    $("#subdomains-reset").addEventListener("click", async () => {
+      state.filters = {
+        targetId: "",
+        status: "",
+        technology: "",
+        search: "",
+        sortBy: "last_seen",
+        sortDir: "desc",
+      };
+      syncControls();
+      await applyFilters();
+    });
+
+    syncControls();
+    loadTargets()
+      .then(() => loadSubdomains())
+      .then(() => {
+        staleBanner.classList.remove("is-visible");
+        setUpdatedAt(updatedAt, Date.now());
+        applyRelativeTimestamps();
+      })
+      .catch((error) => setMessage(message, "error", error.message));
+
+    startPolling({
+      intervalMs: 30000,
+      run: async () => {
+        await loadSubdomains();
+        return true;
+      },
+      onSuccess: () => {
+        staleBanner.classList.remove("is-visible");
+        setUpdatedAt(updatedAt, Date.now());
+        applyRelativeTimestamps();
+      },
+      onError: (error, failCount) => {
+        staleBanner.textContent = `Subdomains refresh failed (${failCount}). ${error.message}`;
+        staleBanner.classList.add("is-visible");
+      },
+    });
+  }
+
   function initTargets() {
     const message = $("#page-message");
     const updatedAt = $("#last-updated");
@@ -988,6 +1221,7 @@
     const page = document.body.dataset.page;
     if (page === "dashboard") initDashboard();
     if (page === "findings") initFindings();
+    if (page === "subdomains") initSubdomains();
     if (page === "targets") initTargets();
     if (page === "ops") initOps();
   });

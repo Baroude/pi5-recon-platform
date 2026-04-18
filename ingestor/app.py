@@ -186,6 +186,19 @@ def _decode_json_text(raw_text: Optional[str]) -> Any:
         return None
 
 
+def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _parse_technology_csv(raw_value: Optional[str]) -> list[str]:
+    if not raw_value:
+        return []
+    return sorted({item.strip().lower() for item in raw_value.split(",") if item and item.strip()})
+
+
 def _drain_target_queues(r: redis_lib.Redis, scope_root: str) -> int:
     """Remove all pending/processing queue entries for scope_root. Returns count removed."""
     drained = 0
@@ -1135,22 +1148,139 @@ def update_finding_status(finding_id: int, body: dict[str, str]):
 @app.get("/subdomains")
 def list_subdomains(
     target_id: Optional[int] = None,
+    status: Optional[str] = None,
+    technology: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: str = "last_seen",
+    sort_dir: str = "desc",
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, le=1000),
 ):
-    where = "WHERE s.target_id = :tid" if target_id else ""
+    normalized_status = _normalize_optional_text(status)
+    normalized_technology = _normalize_optional_text(technology)
+    normalized_search = _normalize_optional_text(search)
+    normalized_sort_by = (_normalize_optional_text(sort_by) or "last_seen").lower()
+    normalized_sort_dir = (_normalize_optional_text(sort_dir) or "desc").lower()
+
+    allowed_statuses = {"online", "offline"}
+    allowed_sort_fields = {"hostname", "last_seen", "status", "scope_root"}
+    allowed_sort_dirs = {"asc", "desc"}
+
+    if normalized_status and normalized_status.lower() not in allowed_statuses:
+        raise HTTPException(status_code=400, detail=f"status must be one of: {sorted(allowed_statuses)}")
+    if normalized_sort_by not in allowed_sort_fields:
+        raise HTTPException(status_code=400, detail=f"sort_by must be one of: {sorted(allowed_sort_fields)}")
+    if normalized_sort_dir not in allowed_sort_dirs:
+        raise HTTPException(status_code=400, detail=f"sort_dir must be one of: {sorted(allowed_sort_dirs)}")
+
+    params: dict[str, Any] = {
+        "limit": limit,
+        "offset": offset,
+    }
+    inner_conditions = []
+    outer_conditions = []
+
+    if target_id is not None:
+        inner_conditions.append("s.target_id = :target_id")
+        params["target_id"] = target_id
+    if normalized_search:
+        outer_conditions.append("LOWER(sr.hostname) LIKE :search")
+        params["search"] = f"%{normalized_search.lower()}%"
+    if normalized_status:
+        outer_conditions.append("sr.status = :status")
+        params["status"] = normalized_status.lower()
+    if normalized_technology:
+        outer_conditions.append(
+            """
+            EXISTS (
+                SELECT 1
+                FROM endpoint_technologies etf
+                WHERE etf.subdomain_id = sr.id
+                  AND etf.technology = :technology
+            )
+            """
+        )
+        params["technology"] = normalized_technology.lower()
+
+    sort_columns = {
+        "hostname": "LOWER(sr.hostname)",
+        "last_seen": "sr.last_seen",
+        "status": "CASE sr.status WHEN 'online' THEN 1 ELSE 0 END",
+        "scope_root": "LOWER(sr.scope_root)",
+    }
+    sort_clause = (
+        f"{sort_columns[normalized_sort_by]} {normalized_sort_dir.upper()}, "
+        "LOWER(sr.scope_root) ASC, LOWER(sr.hostname) ASC, sr.id ASC"
+    )
+    inner_where = f"WHERE {' AND '.join(inner_conditions)}" if inner_conditions else ""
+    outer_where = f"WHERE {' AND '.join(outer_conditions)}" if outer_conditions else ""
+
     with db_conn() as conn:
         rows = conn.execute(
             f"""
-            SELECT s.id, s.hostname, s.source, s.first_seen, s.last_seen,
-                   t.scope_root
-            FROM subdomains s
-            JOIN targets t ON t.id = s.target_id
-            {where}
-            ORDER BY s.first_seen DESC LIMIT :lim
+            WITH endpoint_technologies AS (
+                SELECT
+                    e.subdomain_id,
+                    LOWER(TRIM(CAST(je.value AS TEXT))) AS technology
+                FROM endpoints e
+                JOIN json_each(CASE WHEN json_valid(e.technologies) THEN e.technologies ELSE '[]' END) je
+                WHERE TRIM(CAST(je.value AS TEXT)) <> ''
+            ),
+            technology_rollups AS (
+                SELECT
+                    subdomain_id,
+                    GROUP_CONCAT(DISTINCT technology) AS technology_csv
+                FROM endpoint_technologies
+                GROUP BY subdomain_id
+            ),
+            subdomain_rollups AS (
+                SELECT
+                    s.id,
+                    s.target_id,
+                    s.hostname,
+                    s.source,
+                    s.first_seen,
+                    COALESCE(MAX(e.last_seen), s.last_seen) AS last_seen,
+                    t.scope_root,
+                    COUNT(e.id) AS endpoint_count,
+                    SUM(CASE WHEN e.alive = 1 THEN 1 ELSE 0 END) AS alive_endpoint_count,
+                    CASE
+                        WHEN SUM(CASE WHEN e.alive = 1 THEN 1 ELSE 0 END) > 0 THEN 'online'
+                        ELSE 'offline'
+                    END AS status
+                FROM subdomains s
+                JOIN targets t ON t.id = s.target_id
+                LEFT JOIN endpoints e ON e.subdomain_id = s.id
+                {inner_where}
+                GROUP BY s.id, s.target_id, s.hostname, s.source, s.first_seen, s.last_seen, t.scope_root
+            )
+            SELECT
+                sr.id,
+                sr.target_id,
+                sr.hostname,
+                sr.source,
+                sr.first_seen,
+                sr.last_seen,
+                sr.scope_root,
+                sr.status,
+                sr.endpoint_count,
+                COALESCE(sr.alive_endpoint_count, 0) AS alive_endpoint_count,
+                COALESCE(tr.technology_csv, '') AS technology_csv
+            FROM subdomain_rollups sr
+            LEFT JOIN technology_rollups tr ON tr.subdomain_id = sr.id
+            {outer_where}
+            ORDER BY {sort_clause}
+            LIMIT :limit OFFSET :offset
             """,
-            {"tid": target_id, "lim": limit},
+            params,
         ).fetchall()
-    return [dict(r) for r in rows]
+
+    serialized_rows = []
+    for row in rows:
+        item = dict(row)
+        item["technology_tags"] = _parse_technology_csv(item.pop("technology_csv", None))
+        serialized_rows.append(item)
+    return serialized_rows
 
 
 app.mount("/ui", StaticFiles(directory=_STATIC_DIR, html=True), name="ui")
