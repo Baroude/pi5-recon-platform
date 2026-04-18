@@ -83,7 +83,9 @@ _DLQ_QUEUES = [
     "scan_http",
     "notify_finding",
     "company_intel",
-    "company_intel_asn",
+    "company_intel_crt",
+    "company_intel_pivot",
+    "company_intel_ripestat",
 ]
 _ALL_QUEUES = _DLQ_QUEUES
 _ALLOWED_FINDING_STATUSES = {"open", "triaged", "false_positive", "fixed"}
@@ -492,6 +494,7 @@ class DlqActionRequest(BaseModel):
 
 class CompanyIn(BaseModel):
     name: str
+    seed_domain: Optional[str] = None
 
     @field_validator("name")
     @classmethod
@@ -503,16 +506,36 @@ class CompanyIn(BaseModel):
             raise ValueError("name must be 200 characters or fewer")
         return value
 
+    @field_validator("seed_domain")
+    @classmethod
+    def validate_seed_domain(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip().lower()
+        if not v:
+            return None
+        if not re.match(r"^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?)+$", v):
+            raise ValueError("seed_domain must be a valid domain name (e.g. kering.com)")
+        return v
+
 
 class DomainActionRequest(BaseModel):
     domain_ids: Optional[list[int]] = None
     all: bool = False
+    min_trust: Optional[int] = None
 
     @field_validator("domain_ids")
     @classmethod
     def validate_ids(cls, v: Optional[list[int]]) -> Optional[list[int]]:
         if v is not None and len(v) == 0:
             raise ValueError("domain_ids must not be empty when provided")
+        return v
+
+    @field_validator("min_trust")
+    @classmethod
+    def validate_min_trust(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v not in (1, 2, 3):
+            raise ValueError("min_trust must be 1, 2, or 3")
         return v
 
 
@@ -1344,6 +1367,7 @@ def list_subdomain_options():
 
 @app.post("/companies")
 def create_company(body: CompanyIn):
+    r = get_r()
     with db_conn() as conn:
         existing = conn.execute(
             "SELECT id, status FROM companies WHERE name = ?",
@@ -1353,17 +1377,22 @@ def create_company(body: CompanyIn):
             if existing["status"] == "running":
                 raise HTTPException(status_code=409, detail="Discovery already running for this company")
             conn.execute(
-                "UPDATE companies SET status = 'running', last_run_at = datetime('now') WHERE id = ?",
-                (existing["id"],),
+                "UPDATE companies SET status = 'running', last_run_at = datetime('now'), seed_domain = ? WHERE id = ?",
+                (body.seed_domain, existing["id"]),
             )
             company_id = existing["id"]
         else:
             company_id = conn.execute(
-                "INSERT INTO companies (name, status, last_run_at) VALUES (?, 'running', datetime('now'))",
-                (body.name,),
+                "INSERT INTO companies (name, seed_domain, status, last_run_at) VALUES (?, ?, 'running', datetime('now'))",
+                (body.name, body.seed_domain),
             ).lastrowid
 
-    enqueue(get_r(), "company_intel", {"company_id": company_id, "org": body.name})
+    r.incr(f"company:{company_id}:pending_jobs")
+    enqueue(r, "company_intel", {
+        "company_id": company_id,
+        "name": body.name,
+        "seed_domain": body.seed_domain,
+    })
     with db_conn() as conn:
         row = conn.execute("SELECT * FROM companies WHERE id = ?", (company_id,)).fetchone()
     return dict(row)
@@ -1415,9 +1444,26 @@ def get_company(company_id: int):
             (company_id,),
         ).fetchall()
 
+        trust_counts = conn.execute(
+            """
+            SELECT trust_score, COUNT(*) AS cnt
+            FROM discovered_domains
+            WHERE company_id = ? AND status = 'pending'
+            GROUP BY trust_score
+            """,
+            (company_id,),
+        ).fetchall()
+
     domain_counts = {"pending": 0, "approved": 0, "rejected": 0}
     for row in counts:
         domain_counts[row["status"]] = row["cnt"]
+
+    pending_by_trust = {"high": 0, "medium": 0, "low": 0}
+    _trust_labels = {3: "high", 2: "medium", 1: "low"}
+    for row in trust_counts:
+        label = _trust_labels.get(row["trust_score"], "low")
+        pending_by_trust[label] = row["cnt"]
+    domain_counts["pending_by_trust"] = pending_by_trust
 
     asn_rows = []
     for asn in asns:
@@ -1441,34 +1487,59 @@ def rediscover_company(company_id: int):
             (company_id,),
         )
 
-    enqueue(get_r(), "company_intel", {"company_id": company_id, "org": company["name"]})
+    r = get_r()
+    r.incr(f"company:{company_id}:pending_jobs")
+    enqueue(r, "company_intel", {
+        "company_id": company_id,
+        "name": company["name"],
+        "seed_domain": company["seed_domain"] if "seed_domain" in company.keys() else None,
+    })
     return {"status": "running", "company_id": company_id}
 
 
 @app.get("/companies/{company_id}/pending")
-def list_company_pending(
+def list_pending_domains(
     company_id: int,
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
+    trust: Optional[int] = Query(default=None, ge=1, le=3),
 ):
     with db_conn() as conn:
         company = conn.execute("SELECT id FROM companies WHERE id = ?", (company_id,)).fetchone()
         if not company:
             raise HTTPException(status_code=404, detail="Company not found")
-        rows = conn.execute(
-            """
-            SELECT id, domain, ip, source_asn, status, created_at
-            FROM discovered_domains
-            WHERE company_id = ? AND status = 'pending'
-            ORDER BY domain ASC
-            LIMIT ? OFFSET ?
-            """,
-            (company_id, limit, offset),
-        ).fetchall()
-    return [dict(row) for row in rows]
+        if trust is not None:
+            rows = conn.execute(
+                """
+                SELECT id, domain, ip, source_asn, source, trust_score, trust_signals, status, created_at
+                FROM discovered_domains
+                WHERE company_id = ? AND status = 'pending' AND trust_score = ?
+                ORDER BY domain
+                LIMIT ? OFFSET ?
+                """,
+                (company_id, trust, limit, offset),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, domain, ip, source_asn, source, trust_score, trust_signals, status, created_at
+                FROM discovered_domains
+                WHERE company_id = ? AND status = 'pending'
+                ORDER BY trust_score DESC, domain
+                LIMIT ? OFFSET ?
+                """,
+                (company_id, limit, offset),
+            ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def _resolve_domain_ids(conn, company_id: int, body: DomainActionRequest) -> list[int]:
+    if body.min_trust is not None:
+        rows = conn.execute(
+            "SELECT id FROM discovered_domains WHERE company_id = ? AND status = 'pending' AND trust_score >= ?",
+            (company_id, body.min_trust),
+        ).fetchall()
+        return [r["id"] for r in rows]
     if body.all:
         rows = conn.execute(
             "SELECT id FROM discovered_domains WHERE company_id = ? AND status = 'pending'",
@@ -1477,7 +1548,7 @@ def _resolve_domain_ids(conn, company_id: int, body: DomainActionRequest) -> lis
         return [row["id"] for row in rows]
     if body.domain_ids:
         return body.domain_ids
-    raise HTTPException(status_code=400, detail="Provide domain_ids or all=true")
+    raise HTTPException(status_code=400, detail="Provide domain_ids, all=true, or min_trust")
 
 
 @app.post("/companies/{company_id}/approve")
