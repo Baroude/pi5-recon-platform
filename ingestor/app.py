@@ -204,11 +204,9 @@ def _drain_target_queues(r: redis_lib.Redis, scope_root: str) -> int:
     return drained
 
 
-def _purge_target_files(target_id: int, scope_root: str) -> int:
-    """Delete output files for a target. Returns count of files deleted."""
-    deleted = 0
-    paths_to_delete: set[str] = set()
-
+def _collect_target_file_paths(target_id: int, scope_root: str) -> set[str]:
+    """Read file paths to delete for a target. Does not delete anything."""
+    paths: set[str] = set()
     with db_conn() as conn:
         rows = conn.execute(
             """
@@ -219,25 +217,27 @@ def _purge_target_files(target_id: int, scope_root: str) -> int:
             """,
             (target_id,),
         ).fetchall()
-
     for row in rows:
         path = row["raw_blob_path"]
         if path and _is_path_within_base(path, _OUTPUT_DIR):
-            paths_to_delete.add(path)
-
+            paths.add(path)
     pattern = os.path.join(_OUTPUT_DIR, "**", f"*{scope_root}*")
     for path in _glob.glob(pattern, recursive=True):
         if _is_path_within_base(path, _OUTPUT_DIR):
-            paths_to_delete.add(path)
+            paths.add(path)
+    return paths
 
-    for path in paths_to_delete:
+
+def _delete_file_paths(paths: set[str]) -> int:
+    """Delete the given file paths. Returns count deleted."""
+    deleted = 0
+    for path in paths:
         try:
             if os.path.isfile(path):
                 os.remove(path)
                 deleted += 1
         except OSError as exc:
             logger.warning("Purge: could not remove %s: %s", path, exc)
-
     return deleted
 
 
@@ -971,8 +971,7 @@ def purge_target(target_id: int):
             raise HTTPException(status_code=404, detail="Target not found")
 
     scope_root = row["scope_root"]
-    _drain_target_queues(get_r(), scope_root)
-    files_deleted = _purge_target_files(target_id, scope_root)
+    paths_to_delete = _collect_target_file_paths(target_id, scope_root)
 
     with db_conn() as conn:
         subdomain_ids = [r["id"] for r in conn.execute(
@@ -1003,6 +1002,9 @@ def purge_target(target_id: int):
         conn.execute("DELETE FROM jobs WHERE target_ref = ?", (scope_root,))
         conn.execute("DELETE FROM failed_jobs WHERE target_ref = ?", (scope_root,))
         conn.execute("DELETE FROM targets WHERE id = ?", (target_id,))
+
+    _drain_target_queues(get_r(), scope_root)
+    files_deleted = _delete_file_paths(paths_to_delete)
 
     logger.info("Purged target %s (id=%d) — %d file(s) deleted", scope_root, target_id, files_deleted)
     return {"purged": True, "scope_root": scope_root, "files_deleted": files_deleted}
