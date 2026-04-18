@@ -76,7 +76,7 @@ _redis: Optional[redis_lib.Redis] = None
 _refresh_thread: Optional[threading.Thread] = None
 
 _DLQ_QUEUES = ["recon_domain", "brute_domain", "probe_host", "scan_http", "notify_finding"]
-_ALL_QUEUES = ["recon_domain", "brute_domain", "probe_host", "scan_http", "notify_finding"]
+_ALL_QUEUES = _DLQ_QUEUES
 _ALLOWED_FINDING_STATUSES = {"open", "triaged", "false_positive", "fixed"}
 _ALLOWED_FINDING_SEVERITIES = {"critical", "high", "medium", "low", "info"}
 
