@@ -38,6 +38,7 @@ except ModuleNotFoundError:
 class FakeRedis:
     def __init__(self):
         self.lists = {}
+        self._counters = {}
 
     def ping(self):
         return True
@@ -98,7 +99,18 @@ class FakeRedis:
             if key in self.lists:
                 del self.lists[key]
                 deleted += 1
+            if key in self._counters:
+                del self._counters[key]
+                deleted += 1
         return deleted
+
+    def incr(self, key, amount=1):
+        self._counters[key] = self._counters.get(key, 0) + amount
+        return self._counters[key]
+
+    def decr(self, key, amount=1):
+        self._counters[key] = self._counters.get(key, 0) - amount
+        return self._counters[key]
 
 
 @pytest.fixture
@@ -965,6 +977,7 @@ def test_purge_target_no_data(client):
         ("/ui/targets.html", "targets"),
         ("/ui/companies.html", "companies"),
         ("/ui/ops.html", "ops"),
+        ("/ui/logs.html", "logs"),
     ],
 )
 def test_shared_refresh_shell(client, path, data_page):
@@ -1007,6 +1020,7 @@ def test_shared_refresh_shell(client, path, data_page):
     assert 'class="page-header-copy"' in html
     assert 'class="page-header-actions"' in html
     assert '/ui/companies.html' in nav_html
+    assert '/ui/logs.html' in nav_html
     assert len(current_links) == 1
     assert current_links[0] == expected_current_href
 
@@ -1040,6 +1054,7 @@ def test_refresh_tokens_and_layout_hooks(client):
         "/ui/targets.html",
         "/ui/companies.html",
         "/ui/ops.html",
+        "/ui/logs.html",
     ],
 )
 def test_dense_layout_hooks(client, path):
@@ -1141,6 +1156,21 @@ def test_dense_layout_hooks(client, path):
 
         failed_jobs_match = re.search(r'<tbody\b[^>]*id="failed-jobs-body"[^>]*>', html)
         assert failed_jobs_match is not None
+    elif path == "/ui/logs.html":
+        section_match = re.search(r'<section\b[^>]*class="([^"]+)"[^>]*>\s*<div class="page-header-copy">', html, re.S)
+        assert section_match is not None
+        section_tokens = set(section_match.group(1).split())
+        assert {"page-header", "panel", "page-section"} <= section_tokens
+
+        toolbar_match = re.search(r'<div\b[^>]*class="([^"]+)"[^>]*>\s*<label class="logs-worker-select">', html, re.S)
+        assert toolbar_match is not None
+        toolbar_tokens = set(toolbar_match.group(1).split())
+        assert "logs-toolbar" in toolbar_tokens
+
+        output_match = re.search(r'<div\b[^>]*id="logs-output"[^>]*class="([^"]+)"[^>]*>', html)
+        assert output_match is not None
+        output_tokens = set(output_match.group(1).split())
+        assert {"logs-output"} <= output_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -1294,3 +1324,117 @@ def test_domain_action_rejects_empty_list(app_ctx):
 
     with pytest.raises(Exception):
         DomainActionRequest(domain_ids=[])
+
+
+# ---------------------------------------------------------------------------
+# Smarter company discovery — API changes
+# ---------------------------------------------------------------------------
+
+def test_post_companies_accepts_seed_domain(client):
+    test_client, ingestor_app, _, enqueued = client
+    resp = test_client.post("/companies", json={"name": "Kering", "seed_domain": "kering.com"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["seed_domain"] == "kering.com"
+
+
+def test_post_companies_enqueues_with_new_payload(client):
+    test_client, ingestor_app, _, enqueued = client
+    resp = test_client.post("/companies", json={"name": "Kering", "seed_domain": "kering.com"})
+    assert resp.status_code == 200
+    job = next(e for e in enqueued if e["queue"] == "company_intel")
+    assert job["payload"]["name"] == "Kering"
+    assert job["payload"]["seed_domain"] == "kering.com"
+
+
+def _insert_company_with_seed(ingestor_app, name="Kering", seed_domain="kering.com", status="idle"):
+    with ingestor_app.db_conn() as conn:
+        return conn.execute(
+            "INSERT INTO companies (name, seed_domain, status) VALUES (?, ?, ?)",
+            (name, seed_domain, status),
+        ).lastrowid
+
+
+def _insert_domain_with_trust(
+    ingestor_app, company_id, domain, trust_score=1, status="pending"
+):
+    with ingestor_app.db_conn() as conn:
+        return conn.execute(
+            "INSERT INTO discovered_domains (company_id, domain, trust_score, trust_signals, source, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (company_id, domain, trust_score, '[]', 'crt_org', status),
+        ).lastrowid
+
+
+def test_get_company_detail_includes_trust_breakdown(client):
+    test_client, ingestor_app, _, _ = client
+    cid = _insert_company_with_seed(ingestor_app)
+    _insert_domain_with_trust(ingestor_app, cid, "gucci.com", trust_score=3)
+    _insert_domain_with_trust(ingestor_app, cid, "keringapps.com", trust_score=2)
+    _insert_domain_with_trust(ingestor_app, cid, "unknown.com", trust_score=1)
+
+    resp = test_client.get(f"/companies/{cid}")
+    assert resp.status_code == 200
+    dc = resp.json()["domain_counts"]
+    assert dc["pending"] == 3
+    assert dc["pending_by_trust"]["high"] == 1
+    assert dc["pending_by_trust"]["medium"] == 1
+    assert dc["pending_by_trust"]["low"] == 1
+
+
+def test_get_pending_domains_trust_filter(client):
+    test_client, ingestor_app, _, _ = client
+    cid = _insert_company_with_seed(ingestor_app)
+    _insert_domain_with_trust(ingestor_app, cid, "gucci.com", trust_score=3)
+    _insert_domain_with_trust(ingestor_app, cid, "keringapps.com", trust_score=2)
+    _insert_domain_with_trust(ingestor_app, cid, "unknown.com", trust_score=1)
+
+    resp = test_client.get(f"/companies/{cid}/pending?trust=3")
+    assert resp.status_code == 200
+    domains = resp.json()
+    assert len(domains) == 1
+    assert domains[0]["domain"] == "gucci.com"
+
+
+def test_get_pending_domains_no_filter_returns_all(client):
+    test_client, ingestor_app, _, _ = client
+    cid = _insert_company_with_seed(ingestor_app)
+    _insert_domain_with_trust(ingestor_app, cid, "gucci.com", trust_score=3)
+    _insert_domain_with_trust(ingestor_app, cid, "keringapps.com", trust_score=2)
+
+    resp = test_client.get(f"/companies/{cid}/pending")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 2
+
+
+def test_approve_min_trust_approves_only_high(client):
+    test_client, ingestor_app, _, enqueued = client
+    cid = _insert_company_with_seed(ingestor_app)
+    _insert_domain_with_trust(ingestor_app, cid, "gucci.com", trust_score=3)
+    _insert_domain_with_trust(ingestor_app, cid, "keringapps.com", trust_score=2)
+    _insert_domain_with_trust(ingestor_app, cid, "unknown.com", trust_score=1)
+
+    resp = test_client.post(f"/companies/{cid}/approve", json={"min_trust": 3})
+    assert resp.status_code == 200
+    assert resp.json()["approved"] == 1
+
+    with ingestor_app.db_conn() as conn:
+        row = conn.execute(
+            "SELECT status FROM discovered_domains WHERE domain = 'gucci.com'"
+        ).fetchone()
+    assert row["status"] == "approved"
+
+    with ingestor_app.db_conn() as conn:
+        row = conn.execute(
+            "SELECT status FROM discovered_domains WHERE domain = 'keringapps.com'"
+        ).fetchone()
+    assert row["status"] == "pending"
+
+
+def test_rediscover_uses_new_payload_format(client):
+    test_client, ingestor_app, _, enqueued = client
+    cid = _insert_company_with_seed(ingestor_app, status="done")
+    resp = test_client.post(f"/companies/{cid}/discover")
+    assert resp.status_code == 200
+    job = next(e for e in enqueued if e["queue"] == "company_intel")
+    assert "name" in job["payload"]
+    assert "seed_domain" in job["payload"]
