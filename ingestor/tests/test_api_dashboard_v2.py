@@ -178,6 +178,14 @@ def _insert_finding(ingestor_app, endpoint_id, template_id="test-tpl", raw_blob_
         ).lastrowid
 
 
+def _insert_notification(ingestor_app, finding_id):
+    with ingestor_app.db_conn() as conn:
+        return conn.execute(
+            "INSERT INTO notifications (finding_id, channel, delivery_status) VALUES (?, ?, ?)",
+            (finding_id, "telegram", "sent"),
+        ).lastrowid
+
+
 def test_run_target_now_enqueues_for_enabled_target(client):
     test_client, ingestor_app, _, enqueued = client
     target_id = _insert_target(ingestor_app, scope_root="enabled.example.com", enabled=1)
@@ -554,7 +562,8 @@ def test_purge_target_removes_all_data(client, tmp_path, monkeypatch):
     # Create a real file that should be deleted
     raw_blob = tmp_path / "purge.example.com_nuclei.jsonl"
     raw_blob.write_text('{"template-id": "test"}\n')
-    _insert_finding(ingestor_app, endpoint_id, raw_blob_path=str(raw_blob))
+    finding_id = _insert_finding(ingestor_app, endpoint_id, raw_blob_path=str(raw_blob))
+    notification_id = _insert_notification(ingestor_app, finding_id)
 
     # Add a queue task for this target
     fake_redis.lpush("recon_domain", json.dumps({"domain": "purge.example.com"}))
@@ -564,10 +573,11 @@ def test_purge_target_removes_all_data(client, tmp_path, monkeypatch):
     body = res.json()
     assert body["purged"] is True
     assert body["scope_root"] == "purge.example.com"
-    assert body["files_deleted"] >= 1
+    assert body["files_deleted"] == 1
 
     # DB records gone
     with ingestor_app.db_conn() as conn:
+        assert conn.execute("SELECT id FROM notifications WHERE finding_id = ?", (finding_id,)).fetchone() is None
         assert conn.execute("SELECT id FROM targets WHERE id = ?", (target_id,)).fetchone() is None
         assert conn.execute("SELECT id FROM subdomains WHERE target_id = ?", (target_id,)).fetchone() is None
         assert conn.execute("SELECT id FROM endpoints WHERE id = ?", (endpoint_id,)).fetchone() is None
