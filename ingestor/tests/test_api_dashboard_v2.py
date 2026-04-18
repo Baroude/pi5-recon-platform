@@ -1,5 +1,6 @@
 import importlib
 import json
+import re
 import sys
 import types
 from pathlib import Path
@@ -624,6 +625,25 @@ def test_shared_refresh_shell(client, path, data_page):
     assert res.status_code == 200
 
     html = res.text
+    nav_match = re.search(r'<nav class="nav-links" aria-label="Primary">(.*?)</nav>', html, re.S)
+    assert nav_match is not None
+
+    nav_html = nav_match.group(1)
+    anchors = list(re.finditer(r'<a\b([^>]*)>(.*?)</a>', nav_html, re.S))
+    current_links = []
+    for anchor in anchors:
+        attrs = anchor.group(1)
+        href_match = re.search(r'href="([^"]+)"', attrs)
+        assert href_match is not None
+        if 'aria-current="page"' in attrs:
+            current_links.append(href_match.group(1))
+
+    expected_current_href = {
+        "/ui/index.html": "/ui/index.html",
+        "/ui/findings.html": "/ui/findings.html",
+        "/ui/targets.html": "/ui/targets.html",
+        "/ui/ops.html": "/ui/ops.html",
+    }[path]
 
     assert f'<body data-page="{data_page}"' in html
     assert '/ui/app.css' in html
@@ -632,4 +652,5 @@ def test_shared_refresh_shell(client, path, data_page):
     assert 'class="page-header panel"' in html
     assert 'class="page-header-copy"' in html
     assert 'class="page-header-actions"' in html
-    assert 'aria-current="page"' in html
+    assert len(current_links) == 1
+    assert current_links[0] == expected_current_href
