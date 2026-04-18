@@ -167,6 +167,7 @@ services:
       - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
       - INTEL_TIMEOUT_MINUTES=${INTEL_TIMEOUT_MINUTES:-10}
       - LOG_DIR=/logs
+      - SECURITYTRAILS_API_KEY=${SECURITYTRAILS_API_KEY:-}
     volumes:
       - /opt/recon-platform/data/db:/data/db
       - /opt/recon-platform/logs:/logs
