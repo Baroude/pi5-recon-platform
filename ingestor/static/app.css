@@ -160,25 +160,22 @@ main {
 
 .page-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
+  gap: 1.5rem;
 }
 
 .page-header-copy {
   display: grid;
   gap: 0.35rem;
-  flex: 1 1 auto;
   min-width: 0;
+  flex: 1;
 }
 
 .page-header-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 0.65rem;
-  flex-wrap: wrap;
   flex-shrink: 0;
 }
 
@@ -438,8 +435,12 @@ main {
 
 .split-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.95fr);
+  grid-template-columns: 1fr;
   gap: 1rem;
+}
+
+.split-grid:has(.finding-detail.is-open) {
+  grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.95fr);
 }
 
 .filters {
@@ -493,6 +494,13 @@ table tbody tr.clickable {
 
 table tbody tr.clickable:hover {
   background: rgba(255, 255, 255, 0.03);
+}
+
+#findings-body td:nth-child(2) {
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 td code,
@@ -594,17 +602,13 @@ td code,
 }
 
 .finding-detail {
-  position: sticky;
-  top: 6rem;
-  transform: translateX(1rem);
-  opacity: 0;
-  pointer-events: none;
-  transition: transform 180ms ease, opacity 180ms ease;
+  display: none;
 }
 
 .finding-detail.is-open {
-  transform: translateX(0);
-  opacity: 1;
+  display: grid;
+  position: sticky;
+  top: 6rem;
   pointer-events: auto;
 }
 
