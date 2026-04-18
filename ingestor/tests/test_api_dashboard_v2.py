@@ -674,3 +674,50 @@ def test_refresh_tokens_and_layout_hooks(client):
         ".inspector-panel {",
     ]:
         assert marker in css
+
+
+@pytest.mark.parametrize(
+    "path, markers",
+    [
+        (
+            "/ui/index.html",
+            [
+                'id="overview-cards" class="card-grid"',
+                'class="panel page-section"',
+                'id="dashboard-targets-body"',
+            ],
+        ),
+        (
+            "/ui/findings.html",
+            [
+                'class="filters compact filters-toolbar"',
+                'class="panel page-section finding-detail inspector-panel"',
+                'id="findings-body"',
+            ],
+        ),
+        (
+            "/ui/targets.html",
+            [
+                'class="panel page-section form-panel"',
+                'id="targets-body"',
+                'class="target-dialog inspector-panel"',
+            ],
+        ),
+        (
+            "/ui/ops.html",
+            [
+                'id="dlq-list" class="accordion-list"',
+                'id="failed-jobs-body"',
+                'class="panel page-section"',
+            ],
+        ),
+    ],
+)
+def test_dense_layout_hooks(client, path, markers):
+    test_client, _, _, _ = client
+    res = test_client.get(path)
+    assert res.status_code == 200
+
+    html = res.text
+    for marker in markers:
+        assert marker in html

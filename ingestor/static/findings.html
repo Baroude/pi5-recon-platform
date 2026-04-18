@@ -52,7 +52,7 @@
           <div class="panel-meta" id="findings-count">0 visible</div>
         </div>
 
-        <form id="findings-filters" class="filters compact">
+        <form id="findings-filters" class="filters compact filters-toolbar">
           <label>
             Severity
             <select id="filter-severity" multiple size="5">
@@ -94,7 +94,7 @@
               <option value="severity_asc">Severity low to high</option>
             </select>
           </label>
-          <div class="toolbar-actions">
+          <div class="toolbar-actions compact">
             <button type="submit">Apply</button>
             <button type="button" id="filter-reset" class="secondary">Reset</button>
           </div>
@@ -126,7 +126,7 @@
           </div>
         </section>
 
-        <aside id="finding-detail" class="panel finding-detail">
+        <aside id="finding-detail" class="panel page-section finding-detail inspector-panel">
           <div class="header-compact">
             <div>
               <h2 class="panel-title">Finding detail</h2>
