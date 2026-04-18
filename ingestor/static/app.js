@@ -675,7 +675,7 @@
           <td>${formatNumber(target.subdomain_count)}</td>
           <td>${formatNumber(target.finding_open_count)}</td>
           <td>
-            <div class="table-actions">
+            <div class="table-actions compact">
               <button type="button" class="contrast" data-edit='${escapeHtml(JSON.stringify(target))}'>Edit</button>
               <button type="button" class="secondary" data-run="${target.id}">Run now</button>
               ${target.enabled ? `<button type="button" class="secondary" data-stop="${target.id}" data-name="${escapeHtml(target.scope_root)}">Stop</button>` : ""}
