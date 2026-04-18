@@ -1338,4 +1338,221 @@ def list_subdomain_options():
     return {"technologies": [row["technology"] for row in rows]}
 
 
+# ---------------------------------------------------------------------------
+# Companies
+# ---------------------------------------------------------------------------
+
+@app.post("/companies")
+def create_company(body: CompanyIn):
+    with db_conn() as conn:
+        existing = conn.execute(
+            "SELECT id, status FROM companies WHERE name = ?",
+            (body.name,),
+        ).fetchone()
+        if existing:
+            if existing["status"] == "running":
+                raise HTTPException(status_code=409, detail="Discovery already running for this company")
+            conn.execute(
+                "UPDATE companies SET status = 'running', last_run_at = datetime('now') WHERE id = ?",
+                (existing["id"],),
+            )
+            company_id = existing["id"]
+        else:
+            company_id = conn.execute(
+                "INSERT INTO companies (name, status, last_run_at) VALUES (?, 'running', datetime('now'))",
+                (body.name,),
+            ).lastrowid
+
+    enqueue(get_r(), "company_intel", {"company_id": company_id, "org": body.name})
+    with db_conn() as conn:
+        row = conn.execute("SELECT * FROM companies WHERE id = ?", (company_id,)).fetchone()
+    return dict(row)
+
+
+@app.get("/companies")
+def list_companies():
+    with db_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.id, c.name, c.status, c.created_at, c.last_run_at,
+                   COUNT(CASE WHEN d.status = 'pending' THEN 1 END) AS pending_count
+            FROM companies c
+            LEFT JOIN discovered_domains d ON d.company_id = c.id
+            GROUP BY c.id
+            ORDER BY c.created_at DESC, c.id DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.get("/companies/{company_id}")
+def get_company(company_id: int):
+    with db_conn() as conn:
+        company = conn.execute(
+            "SELECT * FROM companies WHERE id = ?",
+            (company_id,),
+        ).fetchone()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        asns = conn.execute(
+            """
+            SELECT id, asn, description, cidr_ranges, created_at
+            FROM discovered_asns
+            WHERE company_id = ?
+            ORDER BY asn
+            """,
+            (company_id,),
+        ).fetchall()
+
+        counts = conn.execute(
+            """
+            SELECT status, COUNT(*) AS cnt
+            FROM discovered_domains
+            WHERE company_id = ?
+            GROUP BY status
+            """,
+            (company_id,),
+        ).fetchall()
+
+    domain_counts = {"pending": 0, "approved": 0, "rejected": 0}
+    for row in counts:
+        domain_counts[row["status"]] = row["cnt"]
+
+    asn_rows = []
+    for asn in asns:
+        item = dict(asn)
+        item["cidr_ranges"] = _decode_json_text(item.get("cidr_ranges")) or []
+        asn_rows.append(item)
+
+    return {**dict(company), "asns": asn_rows, "domain_counts": domain_counts}
+
+
+@app.post("/companies/{company_id}/discover")
+def rediscover_company(company_id: int):
+    with db_conn() as conn:
+        company = conn.execute("SELECT * FROM companies WHERE id = ?", (company_id,)).fetchone()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+        if company["status"] == "running":
+            raise HTTPException(status_code=409, detail="Discovery already running")
+        conn.execute(
+            "UPDATE companies SET status = 'running', last_run_at = datetime('now') WHERE id = ?",
+            (company_id,),
+        )
+
+    enqueue(get_r(), "company_intel", {"company_id": company_id, "org": company["name"]})
+    return {"status": "running", "company_id": company_id}
+
+
+@app.get("/companies/{company_id}/pending")
+def list_company_pending(
+    company_id: int,
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
+    with db_conn() as conn:
+        company = conn.execute("SELECT id FROM companies WHERE id = ?", (company_id,)).fetchone()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+        rows = conn.execute(
+            """
+            SELECT id, domain, ip, source_asn, status, created_at
+            FROM discovered_domains
+            WHERE company_id = ? AND status = 'pending'
+            ORDER BY domain ASC
+            LIMIT ? OFFSET ?
+            """,
+            (company_id, limit, offset),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _resolve_domain_ids(conn, company_id: int, body: DomainActionRequest) -> list[int]:
+    if body.all:
+        rows = conn.execute(
+            "SELECT id FROM discovered_domains WHERE company_id = ? AND status = 'pending'",
+            (company_id,),
+        ).fetchall()
+        return [row["id"] for row in rows]
+    if body.domain_ids:
+        return body.domain_ids
+    raise HTTPException(status_code=400, detail="Provide domain_ids or all=true")
+
+
+@app.post("/companies/{company_id}/approve")
+def approve_domains(company_id: int, body: DomainActionRequest):
+    with db_conn() as conn:
+        company = conn.execute("SELECT id FROM companies WHERE id = ?", (company_id,)).fetchone()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        ids = _resolve_domain_ids(conn, company_id, body)
+        if not ids:
+            return {"approved": 0}
+
+        placeholders = ",".join("?" * len(ids))
+        rows = conn.execute(
+            f"""
+            SELECT id, domain
+            FROM discovered_domains
+            WHERE company_id = ? AND status = 'pending' AND id IN ({placeholders})
+            """,
+            (company_id, *ids),
+        ).fetchall()
+
+    approved = 0
+    redis_client = get_r()
+    for row in rows:
+        domain = row["domain"].strip().lower()
+        if not _DOMAIN_RE.match(domain):
+            raise HTTPException(status_code=400, detail=f"Invalid discovered domain: {domain}")
+
+        with db_conn() as conn:
+            existing = conn.execute(
+                "SELECT id, enabled FROM targets WHERE scope_root = ?",
+                (domain,),
+            ).fetchone()
+            if existing and existing["enabled"] == 1:
+                pass
+            elif existing:
+                conn.execute("UPDATE targets SET enabled = 1 WHERE id = ?", (existing["id"],))
+            else:
+                conn.execute("INSERT INTO targets (scope_root) VALUES (?)", (domain,))
+
+            conn.execute(
+                "UPDATE discovered_domains SET status = 'approved' WHERE id = ?",
+                (row["id"],),
+            )
+
+        enqueue(redis_client, "recon_domain", {"domain": domain}, dedup_key=domain, dedup_ttl_secs=3600)
+        approved += 1
+
+    return {"approved": approved}
+
+
+@app.post("/companies/{company_id}/reject")
+def reject_domains(company_id: int, body: DomainActionRequest):
+    with db_conn() as conn:
+        company = conn.execute("SELECT id FROM companies WHERE id = ?", (company_id,)).fetchone()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        ids = _resolve_domain_ids(conn, company_id, body)
+        if not ids:
+            return {"rejected": 0}
+
+        placeholders = ",".join("?" * len(ids))
+        conn.execute(
+            f"""
+            UPDATE discovered_domains
+            SET status = 'rejected'
+            WHERE company_id = ? AND status = 'pending' AND id IN ({placeholders})
+            """,
+            (company_id, *ids),
+        )
+
+    return {"rejected": len(ids)}
+
+
 app.mount("/ui", StaticFiles(directory=_STATIC_DIR, html=True), name="ui")

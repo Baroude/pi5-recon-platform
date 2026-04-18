@@ -1129,6 +1129,131 @@ def test_dense_layout_hooks(client, path):
 
 
 # ---------------------------------------------------------------------------
+# Company endpoints
+# ---------------------------------------------------------------------------
+
+def _insert_company(ingestor_app, name="Kering", status="idle"):
+    with ingestor_app.db_conn() as conn:
+        return conn.execute(
+            "INSERT INTO companies (name, status) VALUES (?, ?)",
+            (name, status),
+        ).lastrowid
+
+
+def _insert_discovered_domain(ingestor_app, company_id, domain, status="pending", ip=None, source_asn=None):
+    with ingestor_app.db_conn() as conn:
+        return conn.execute(
+            "INSERT INTO discovered_domains (company_id, domain, ip, source_asn, status) VALUES (?, ?, ?, ?, ?)",
+            (company_id, domain, ip, source_asn, status),
+        ).lastrowid
+
+
+def _insert_discovered_asn(ingestor_app, company_id, asn="12345", description="TEST-NET"):
+    with ingestor_app.db_conn() as conn:
+        return conn.execute(
+            "INSERT INTO discovered_asns (company_id, asn, description) VALUES (?, ?, ?)",
+            (company_id, asn, description),
+        ).lastrowid
+
+
+def test_post_companies_creates_and_enqueues(client):
+    test_client, ingestor_app, fake_redis, enqueued = client
+
+    resp = test_client.post("/companies", json={"name": "Kering"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["name"] == "Kering"
+    assert data["status"] == "running"
+    assert any(e["queue"] == "company_intel" for e in enqueued)
+
+
+def test_post_companies_rejects_empty_name(client):
+    test_client, _, _, _ = client
+    resp = test_client.post("/companies", json={"name": "  "})
+    assert resp.status_code == 422
+
+
+def test_get_companies_lists_all(client):
+    test_client, ingestor_app, _, _ = client
+    _insert_company(ingestor_app, "Kering")
+    resp = test_client.get("/companies")
+    assert resp.status_code == 200
+    assert any(c["name"] == "Kering" for c in resp.json())
+
+
+def test_get_company_detail(client):
+    test_client, ingestor_app, _, _ = client
+    cid = _insert_company(ingestor_app, "Kering")
+    _insert_discovered_asn(ingestor_app, cid)
+    _insert_discovered_domain(ingestor_app, cid, "gucci.com")
+    resp = test_client.get(f"/companies/{cid}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["name"] == "Kering"
+    assert len(data["asns"]) == 1
+    assert data["domain_counts"]["pending"] == 1
+
+
+def test_get_company_pending(client):
+    test_client, ingestor_app, _, _ = client
+    cid = _insert_company(ingestor_app, "Kering")
+    _insert_discovered_domain(ingestor_app, cid, "gucci.com")
+    _insert_discovered_domain(ingestor_app, cid, "ysl.com")
+    resp = test_client.get(f"/companies/{cid}/pending")
+    assert resp.status_code == 200
+    domains = resp.json()
+    assert len(domains) == 2
+
+
+def test_approve_domains_adds_target_and_enqueues(client):
+    test_client, ingestor_app, _, enqueued = client
+    cid = _insert_company(ingestor_app, "Kering")
+    did = _insert_discovered_domain(ingestor_app, cid, "gucci.com")
+    resp = test_client.post(f"/companies/{cid}/approve", json={"domain_ids": [did]})
+    assert resp.status_code == 200
+    assert resp.json()["approved"] == 1
+    assert any(e["queue"] == "recon_domain" for e in enqueued)
+    with ingestor_app.db_conn() as conn:
+        row = conn.execute("SELECT * FROM targets WHERE scope_root = 'gucci.com'").fetchone()
+    assert row is not None
+
+
+def test_approve_all_domains(client):
+    test_client, ingestor_app, _, enqueued = client
+    cid = _insert_company(ingestor_app, "Kering")
+    _insert_discovered_domain(ingestor_app, cid, "gucci.com")
+    _insert_discovered_domain(ingestor_app, cid, "ysl.com")
+    resp = test_client.post(f"/companies/{cid}/approve", json={"all": True})
+    assert resp.status_code == 200
+    assert resp.json()["approved"] == 2
+
+
+def test_reject_domains(client):
+    test_client, ingestor_app, _, _ = client
+    cid = _insert_company(ingestor_app, "Kering")
+    did = _insert_discovered_domain(ingestor_app, cid, "gucci.com")
+    resp = test_client.post(f"/companies/{cid}/reject", json={"domain_ids": [did]})
+    assert resp.status_code == 200
+    with ingestor_app.db_conn() as conn:
+        row = conn.execute("SELECT status FROM discovered_domains WHERE id = ?", (did,)).fetchone()
+    assert row["status"] == "rejected"
+
+
+def test_rediscover_reenqueues(client):
+    test_client, ingestor_app, _, enqueued = client
+    cid = _insert_company(ingestor_app, "Kering", status="done")
+    resp = test_client.post(f"/companies/{cid}/discover")
+    assert resp.status_code == 200
+    assert any(e["queue"] == "company_intel" for e in enqueued)
+
+
+def test_get_company_not_found(client):
+    test_client, _, _, _ = client
+    resp = test_client.get("/companies/9999")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # Company models
 # ---------------------------------------------------------------------------
 
