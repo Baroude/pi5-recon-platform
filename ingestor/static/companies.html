@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recon Platform | Companies</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="/ui/app.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body data-page="companies">
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="/ui/index.html">
+          <span class="brand-mark">R</span>
+          <span>Recon</span>
+        </a>
+        <nav class="nav-links" aria-label="Primary">
+          <a href="/ui/index.html">Dashboard</a>
+          <a href="/ui/findings.html">Findings</a>
+          <a href="/ui/subdomains.html">Subdomains</a>
+          <a href="/ui/targets.html">Targets</a>
+          <a class="is-active" href="/ui/companies.html" aria-current="page">Companies</a>
+          <a href="/ui/ops.html">Ops</a>
+        </nav>
+        <div class="status-meta">
+          <span class="status-dot good"></span>
+          <span id="last-updated">Waiting for data</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div id="page-message" class="message" role="status" aria-live="polite"></div>
+
+      <div id="companies-list-view">
+        <section class="page-header panel page-section">
+          <div class="page-header-copy">
+            <h1>Company discovery review queue</h1>
+            <p>Discover root domains with amass intel, then approve what should enter active recon.</p>
+          </div>
+        </section>
+
+        <section class="panel page-section">
+          <form id="company-create-form" class="inline-form">
+            <div class="inline-form-grid">
+              <label>
+                Company name
+                <input id="company-name-input" placeholder="e.g. Kering" maxlength="200" required>
+              </label>
+              <label>
+                &nbsp;
+                <button type="submit">Start discovery</button>
+              </label>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel page-section">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Companies</h2>
+              <p>Open a company to review pending domains, ASNs, and discovery status.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Company</th>
+                  <th>Status</th>
+                  <th>Pending</th>
+                  <th>Last run</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="companies-body">
+                <tr><td colspan="5"><div class="empty-state">Loading companies...</div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <div id="company-detail-view" style="display:none">
+        <section class="page-header panel page-section">
+          <div class="page-header-copy">
+            <h1 id="company-title">Company</h1>
+            <p id="company-summary">Review pending domains before promotion to targets.</p>
+          </div>
+          <div class="page-header-actions">
+            <button id="company-back" class="secondary">Back</button>
+            <button id="company-rerun">Re-run discovery</button>
+          </div>
+        </section>
+
+        <section class="panel page-section">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Discovered ASNs</h2>
+              <p>ASNs and CIDR hints identified for the selected organization.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ASN</th>
+                  <th>Description</th>
+                  <th>CIDR ranges</th>
+                </tr>
+              </thead>
+              <tbody id="company-asns-body">
+                <tr><td colspan="3"><div class="empty-state">No ASNs discovered yet.</div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel page-section">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Pending domains</h2>
+              <p><span id="pending-count">0</span> pending review.</p>
+            </div>
+            <div class="table-actions compact">
+              <button id="approve-selected" disabled>Approve selected</button>
+              <button id="reject-selected" class="secondary" disabled>Reject selected</button>
+              <button id="approve-all">Approve all</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th><input type="checkbox" id="pending-select-all" aria-label="Select all pending"></th>
+                  <th>Domain</th>
+                  <th>IP</th>
+                  <th>Source ASN</th>
+                </tr>
+              </thead>
+              <tbody id="company-pending-body">
+                <tr><td colspan="4"><div class="empty-state">No pending domains.</div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel page-section">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Approved domains</h2>
+              <p><span id="approved-count">0</span> approved so far.</p>
+            </div>
+          </div>
+          <div id="approved-summary" class="empty-state">No approved domains yet.</div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const messageEl = document.getElementById("page-message");
+      const updatedAtEl = document.getElementById("last-updated");
+      const listViewEl = document.getElementById("companies-list-view");
+      const detailViewEl = document.getElementById("company-detail-view");
+      const companiesBody = document.getElementById("companies-body");
+      const companyNameInput = document.getElementById("company-name-input");
+      const pendingBody = document.getElementById("company-pending-body");
+      const pendingSelectAll = document.getElementById("pending-select-all");
+      const pendingCount = document.getElementById("pending-count");
+      const approvedCount = document.getElementById("approved-count");
+      const approvedSummary = document.getElementById("approved-summary");
+
+      let selectedCompanyId = null;
+      let selectedCompanyName = "";
+      let pollTimer = null;
+
+      function setMessage(type, text) {
+        messageEl.className = "message";
+        if (!text) {
+          messageEl.textContent = "";
+          return;
+        }
+        messageEl.textContent = text;
+        messageEl.classList.add("is-visible", type);
+      }
+
+      function touchUpdatedAt() {
+        updatedAtEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function fmtTimestamp(value) {
+        if (!value) return "-";
+        const normalized = /Z|[+-]\d{2}:\d{2}$/.test(value) ? value : `${value}Z`;
+        const parsed = new Date(normalized);
+        return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+      }
+
+      function statusPill(status) {
+        const normalized = (status || "idle").toLowerCase();
+        const klass = normalized === "idle" ? "pending" : normalized;
+        return `<span class="status-pill ${escapeHtml(klass)}">${escapeHtml(normalized)}</span>`;
+      }
+
+      async function api(path, options = {}) {
+        const response = await fetch(path, {
+          headers: {
+            Accept: "application/json",
+            ...(options.body ? { "Content-Type": "application/json" } : {}),
+            ...(options.headers || {}),
+          },
+          ...options,
+        });
+
+        const text = await response.text();
+        let payload = null;
+        try {
+          payload = text ? JSON.parse(text) : null;
+        } catch {
+          payload = text;
+        }
+
+        if (!response.ok) {
+          const detail = payload && typeof payload === "object" ? payload.detail || payload.message : text;
+          throw new Error(typeof detail === "string" ? detail : response.statusText);
+        }
+        return payload;
+      }
+
+      function getSelectedPendingIds() {
+        return [...document.querySelectorAll(".pending-row-select:checked")]
+          .map((checkbox) => Number(checkbox.value))
+          .filter((value) => Number.isFinite(value));
+      }
+
+      function syncPendingSelectionButtons() {
+        const selected = getSelectedPendingIds().length;
+        document.getElementById("approve-selected").disabled = selected === 0;
+        document.getElementById("reject-selected").disabled = selected === 0;
+      }
+
+      function renderCompanies(rows) {
+        if (!rows.length) {
+          companiesBody.innerHTML = '<tr><td colspan="5"><div class="empty-state">No companies yet.</div></td></tr>';
+          return;
+        }
+
+        companiesBody.innerHTML = rows.map((company) => `
+          <tr>
+            <td><strong>${escapeHtml(company.name)}</strong></td>
+            <td>${statusPill(company.status)}</td>
+            <td>${escapeHtml(company.pending_count || 0)}</td>
+            <td>${escapeHtml(fmtTimestamp(company.last_run_at))}</td>
+            <td class="target-actions">
+              <button type="button" data-open-company="${company.id}">Open</button>
+              <button type="button" class="secondary" data-rerun-company="${company.id}" data-company-name="${escapeHtml(company.name)}">Run</button>
+            </td>
+          </tr>
+        `).join("");
+      }
+
+      async function refreshCompanies() {
+        const rows = await api("/companies");
+        renderCompanies(rows || []);
+        touchUpdatedAt();
+      }
+
+      function renderCompanyAsns(asns) {
+        const asnBody = document.getElementById("company-asns-body");
+        if (!asns.length) {
+          asnBody.innerHTML = '<tr><td colspan="3"><div class="empty-state">No ASNs discovered yet.</div></td></tr>';
+          return;
+        }
+
+        asnBody.innerHTML = asns.map((asn) => `
+          <tr>
+            <td>AS${escapeHtml(asn.asn)}</td>
+            <td>${escapeHtml(asn.description || "-")}</td>
+            <td>${escapeHtml((asn.cidr_ranges || []).join(", ") || "-")}</td>
+          </tr>
+        `).join("");
+      }
+
+      function renderPendingDomains(rows) {
+        if (!rows.length) {
+          pendingBody.innerHTML = '<tr><td colspan="4"><div class="empty-state">No pending domains.</div></td></tr>';
+          pendingSelectAll.checked = false;
+          syncPendingSelectionButtons();
+          return;
+        }
+
+        pendingBody.innerHTML = rows.map((row) => `
+          <tr>
+            <td><input class="pending-row-select" type="checkbox" value="${row.id}" aria-label="Select ${escapeHtml(row.domain)}"></td>
+            <td><strong>${escapeHtml(row.domain)}</strong></td>
+            <td>${escapeHtml(row.ip || "-")}</td>
+            <td>${escapeHtml(row.source_asn ? `AS${row.source_asn}` : "-")}</td>
+          </tr>
+        `).join("");
+
+        pendingBody.querySelectorAll(".pending-row-select").forEach((checkbox) => {
+          checkbox.addEventListener("change", syncPendingSelectionButtons);
+        });
+        syncPendingSelectionButtons();
+      }
+
+      async function refreshCompanyDetail() {
+        if (!selectedCompanyId) return;
+
+        const [company, pending] = await Promise.all([
+          api(`/companies/${selectedCompanyId}`),
+          api(`/companies/${selectedCompanyId}/pending?limit=500`),
+        ]);
+
+        document.getElementById("company-title").textContent = company.name;
+        document.getElementById("company-summary").innerHTML = `Status: ${statusPill(company.status)}`;
+        renderCompanyAsns(company.asns || []);
+        renderPendingDomains(pending || []);
+
+        const counts = company.domain_counts || {};
+        pendingCount.textContent = String(counts.pending || 0);
+        approvedCount.textContent = String(counts.approved || 0);
+        if (counts.approved) {
+          approvedSummary.innerHTML = `<a href="/ui/targets.html">${escapeHtml(counts.approved)} domain(s) are now in Targets.</a>`;
+        } else {
+          approvedSummary.textContent = "No approved domains yet.";
+        }
+
+        touchUpdatedAt();
+
+        clearTimeout(pollTimer);
+        if ((company.status || "").toLowerCase() === "running") {
+          pollTimer = window.setTimeout(() => {
+            refreshCompanyDetail().catch((error) => setMessage("error", error.message));
+          }, 5000);
+        }
+      }
+
+      async function openCompany(companyId, companyName) {
+        selectedCompanyId = Number(companyId);
+        selectedCompanyName = companyName || "";
+        setMessage("", "");
+        listViewEl.style.display = "none";
+        detailViewEl.style.display = "";
+        await refreshCompanyDetail();
+      }
+
+      function closeCompanyDetail() {
+        selectedCompanyId = null;
+        selectedCompanyName = "";
+        clearTimeout(pollTimer);
+        listViewEl.style.display = "";
+        detailViewEl.style.display = "none";
+        setMessage("", "");
+        refreshCompanies().catch((error) => setMessage("error", error.message));
+      }
+
+      async function runDiscovery(companyId, companyName) {
+        await api(`/companies/${companyId}/discover`, { method: "POST" });
+        setMessage("success", `Discovery started for ${companyName}.`);
+      }
+
+      async function performAction(path, payload) {
+        await api(path, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+      }
+
+      document.getElementById("company-create-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const name = companyNameInput.value.trim();
+        if (!name) return;
+        try {
+          await performAction("/companies", { name });
+          setMessage("success", `Discovery started for ${name}.`);
+          companyNameInput.value = "";
+          await refreshCompanies();
+        } catch (error) {
+          setMessage("error", error.message);
+        }
+      });
+
+      companiesBody.addEventListener("click", async (event) => {
+        const openButton = event.target.closest("button[data-open-company]");
+        if (openButton) {
+          const row = openButton.closest("tr");
+          const companyName = row ? row.querySelector("strong")?.textContent || "" : "";
+          try {
+            await openCompany(openButton.dataset.openCompany, companyName);
+          } catch (error) {
+            setMessage("error", error.message);
+          }
+          return;
+        }
+
+        const rerunButton = event.target.closest("button[data-rerun-company]");
+        if (rerunButton) {
+          try {
+            await runDiscovery(rerunButton.dataset.rerunCompany, rerunButton.dataset.companyName || "company");
+            await refreshCompanies();
+          } catch (error) {
+            setMessage("error", error.message);
+          }
+        }
+      });
+
+      document.getElementById("company-back").addEventListener("click", closeCompanyDetail);
+
+      document.getElementById("company-rerun").addEventListener("click", async () => {
+        if (!selectedCompanyId) return;
+        try {
+          await runDiscovery(selectedCompanyId, selectedCompanyName || "company");
+          await refreshCompanyDetail();
+        } catch (error) {
+          setMessage("error", error.message);
+        }
+      });
+
+      pendingSelectAll.addEventListener("change", () => {
+        pendingBody.querySelectorAll(".pending-row-select").forEach((checkbox) => {
+          checkbox.checked = pendingSelectAll.checked;
+        });
+        syncPendingSelectionButtons();
+      });
+
+      document.getElementById("approve-selected").addEventListener("click", async () => {
+        if (!selectedCompanyId) return;
+        const domainIds = getSelectedPendingIds();
+        if (!domainIds.length) return;
+        try {
+          await performAction(`/companies/${selectedCompanyId}/approve`, { domain_ids: domainIds });
+          setMessage("success", `Approved ${domainIds.length} domain(s).`);
+          pendingSelectAll.checked = false;
+          await refreshCompanyDetail();
+        } catch (error) {
+          setMessage("error", error.message);
+        }
+      });
+
+      document.getElementById("reject-selected").addEventListener("click", async () => {
+        if (!selectedCompanyId) return;
+        const domainIds = getSelectedPendingIds();
+        if (!domainIds.length) return;
+        try {
+          await performAction(`/companies/${selectedCompanyId}/reject`, { domain_ids: domainIds });
+          setMessage("success", `Rejected ${domainIds.length} domain(s).`);
+          pendingSelectAll.checked = false;
+          await refreshCompanyDetail();
+        } catch (error) {
+          setMessage("error", error.message);
+        }
+      });
+
+      document.getElementById("approve-all").addEventListener("click", async () => {
+        if (!selectedCompanyId) return;
+        try {
+          await performAction(`/companies/${selectedCompanyId}/approve`, { all: true });
+          setMessage("success", "Approved all pending domains.");
+          pendingSelectAll.checked = false;
+          await refreshCompanyDetail();
+        } catch (error) {
+          setMessage("error", error.message);
+        }
+      });
+
+      refreshCompanies().catch((error) => setMessage("error", error.message));
+    })();
+  </script>
+</body>
+</html>
