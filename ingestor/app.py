@@ -22,6 +22,7 @@ Endpoints
   GET  /health               Liveness probe.
 """
 
+import glob as _glob
 import json
 import logging
 import os
@@ -201,6 +202,43 @@ def _drain_target_queues(r: redis_lib.Redis, scope_root: str) -> int:
     ]
     r.delete(*inflight_keys)
     return drained
+
+
+def _purge_target_files(target_id: int, scope_root: str) -> int:
+    """Delete output files for a target. Returns count of files deleted."""
+    deleted = 0
+    paths_to_delete: set[str] = set()
+
+    with db_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT f.raw_blob_path FROM findings f
+            JOIN endpoints e ON e.id = f.endpoint_id
+            JOIN subdomains s ON s.id = e.subdomain_id
+            WHERE s.target_id = ?
+            """,
+            (target_id,),
+        ).fetchall()
+
+    for row in rows:
+        path = row["raw_blob_path"]
+        if path and _is_path_within_base(path, _OUTPUT_DIR):
+            paths_to_delete.add(path)
+
+    pattern = os.path.join(_OUTPUT_DIR, "**", f"*{scope_root}*")
+    for path in _glob.glob(pattern, recursive=True):
+        if _is_path_within_base(path, _OUTPUT_DIR):
+            paths_to_delete.add(path)
+
+    for path in paths_to_delete:
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+                deleted += 1
+        except OSError as exc:
+            logger.warning("Purge: could not remove %s: %s", path, exc)
+
+    return deleted
 
 
 def _validate_queue_name(queue: str) -> str:
@@ -923,6 +961,51 @@ def stop_target(target_id: int):
     drained = _drain_target_queues(get_r(), scope_root)
     logger.info("Stopped target %s — drained %d task(s)", scope_root, drained)
     return {"stopped": True, "scope_root": scope_root, "tasks_drained": drained}
+
+
+@app.post("/targets/{target_id}/purge", status_code=200)
+def purge_target(target_id: int):
+    with db_conn() as conn:
+        row = conn.execute("SELECT scope_root FROM targets WHERE id = ?", (target_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Target not found")
+
+    scope_root = row["scope_root"]
+    _drain_target_queues(get_r(), scope_root)
+    files_deleted = _purge_target_files(target_id, scope_root)
+
+    with db_conn() as conn:
+        subdomain_ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM subdomains WHERE target_id = ?", (target_id,)
+        ).fetchall()]
+
+        if subdomain_ids:
+            ph = ",".join("?" * len(subdomain_ids))
+            endpoint_ids = [r["id"] for r in conn.execute(
+                f"SELECT id FROM endpoints WHERE subdomain_id IN ({ph})", subdomain_ids
+            ).fetchall()]
+
+            if endpoint_ids:
+                ep_ph = ",".join("?" * len(endpoint_ids))
+                finding_ids = [r["id"] for r in conn.execute(
+                    f"SELECT id FROM findings WHERE endpoint_id IN ({ep_ph})", endpoint_ids
+                ).fetchall()]
+
+                if finding_ids:
+                    fi_ph = ",".join("?" * len(finding_ids))
+                    conn.execute(f"DELETE FROM notifications WHERE finding_id IN ({fi_ph})", finding_ids)
+                    conn.execute(f"DELETE FROM findings WHERE id IN ({fi_ph})", finding_ids)
+
+                conn.execute(f"DELETE FROM endpoints WHERE id IN ({ep_ph})", endpoint_ids)
+
+            conn.execute(f"DELETE FROM subdomains WHERE id IN ({ph})", subdomain_ids)
+
+        conn.execute("DELETE FROM jobs WHERE target_ref = ?", (scope_root,))
+        conn.execute("DELETE FROM failed_jobs WHERE target_ref = ?", (scope_root,))
+        conn.execute("DELETE FROM targets WHERE id = ?", (target_id,))
+
+    logger.info("Purged target %s (id=%d) — %d file(s) deleted", scope_root, target_id, files_deleted)
+    return {"purged": True, "scope_root": scope_root, "files_deleted": files_deleted}
 
 
 @app.get("/targets/{target_id}/jobs")
