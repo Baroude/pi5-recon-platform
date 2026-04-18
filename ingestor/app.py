@@ -76,7 +76,15 @@ app = FastAPI(title="Recon Platform Ingestor", version="1.0")
 _redis: Optional[redis_lib.Redis] = None
 _refresh_thread: Optional[threading.Thread] = None
 
-_DLQ_QUEUES = ["recon_domain", "brute_domain", "probe_host", "scan_http", "notify_finding"]
+_DLQ_QUEUES = [
+    "recon_domain",
+    "brute_domain",
+    "probe_host",
+    "scan_http",
+    "notify_finding",
+    "company_intel",
+    "company_intel_asn",
+]
 _ALL_QUEUES = _DLQ_QUEUES
 _ALLOWED_FINDING_STATUSES = {"open", "triaged", "false_positive", "fixed"}
 _ALLOWED_FINDING_SEVERITIES = {"critical", "high", "medium", "low", "info"}
@@ -480,6 +488,32 @@ class DlqActionRequest(BaseModel):
         if not value:
             raise ValueError("raw must not be empty")
         return value
+
+
+class CompanyIn(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        value = v.strip()
+        if not value:
+            raise ValueError("name must not be empty")
+        if len(value) > 200:
+            raise ValueError("name must be 200 characters or fewer")
+        return value
+
+
+class DomainActionRequest(BaseModel):
+    domain_ids: Optional[list[int]] = None
+    all: bool = False
+
+    @field_validator("domain_ids")
+    @classmethod
+    def validate_ids(cls, v: Optional[list[int]]) -> Optional[list[int]]:
+        if v is not None and len(v) == 0:
+            raise ValueError("domain_ids must not be empty when provided")
+        return v
 
 
 # ---------------------------------------------------------------------------

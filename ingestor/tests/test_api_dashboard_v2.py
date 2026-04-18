@@ -1126,3 +1126,31 @@ def test_dense_layout_hooks(client, path):
 
         failed_jobs_match = re.search(r'<tbody\b[^>]*id="failed-jobs-body"[^>]*>', html)
         assert failed_jobs_match is not None
+
+
+# ---------------------------------------------------------------------------
+# Company models
+# ---------------------------------------------------------------------------
+
+def test_company_in_strips_and_validates(app_ctx):
+    ingestor_app, _, _ = app_ctx
+    from app import CompanyIn
+
+    company = CompanyIn(name="  Kering  ")
+    assert company.name == "Kering"
+
+
+def test_company_in_rejects_empty(app_ctx):
+    ingestor_app, _, _ = app_ctx
+    from app import CompanyIn
+
+    with pytest.raises(Exception):
+        CompanyIn(name="   ")
+
+
+def test_domain_action_rejects_empty_list(app_ctx):
+    ingestor_app, _, _ = app_ctx
+    from app import DomainActionRequest
+
+    with pytest.raises(Exception):
+        DomainActionRequest(domain_ids=[])
