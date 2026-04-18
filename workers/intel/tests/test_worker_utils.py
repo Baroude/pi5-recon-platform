@@ -37,7 +37,8 @@ if "requests" not in sys.modules:
     sys.modules["requests"] = _req
 
 import pytest
-from worker import _compute_trust, _extract_root_domain
+import worker
+from worker import _compute_trust, _extract_root_domain, _resolve_lei
 
 
 # ---------------------------------------------------------------------------
@@ -107,3 +108,49 @@ def test_trust_short_company_name_not_matched():
     # "ab" is < 4 chars, should not match "abcdef.com"
     score, signals = _compute_trust("abcdef.com", "AB", None, "crt_seed")
     assert "name_contains_target" not in signals
+
+
+# ---------------------------------------------------------------------------
+# _resolve_lei
+# ---------------------------------------------------------------------------
+
+def test_resolve_lei_uses_fuzzy_id_directly(monkeypatch):
+    def fake_get_json(url, headers=None, params=None):
+        if "fuzzycompletions" in url:
+            return {"data": [{"id": "549300VGEJKB7SVUZR78"}]}
+        raise AssertionError("lei-records fallback should not be called")
+
+    monkeypatch.setattr(worker, "_get_json", fake_get_json)
+    assert _resolve_lei("Kering") == "549300VGEJKB7SVUZR78"
+
+
+def test_resolve_lei_falls_back_to_lei_records_when_fuzzy_has_no_id(monkeypatch):
+    calls = []
+
+    def fake_get_json(url, headers=None, params=None):
+        calls.append((url, params))
+        if "fuzzycompletions" in url:
+            return {
+                "data": [
+                    {"type": "fuzzycompletions", "attributes": {"value": "KERING"}}
+                ]
+            }
+        if "lei-records" in url:
+            return {"data": [{"id": "549300VGEJKB7SVUZR78"}]}
+        return None
+
+    monkeypatch.setattr(worker, "_get_json", fake_get_json)
+    assert _resolve_lei("Kering") == "549300VGEJKB7SVUZR78"
+    assert any("lei-records" in url for url, _ in calls)
+
+
+def test_resolve_lei_returns_none_when_no_match(monkeypatch):
+    def fake_get_json(url, headers=None, params=None):
+        if "fuzzycompletions" in url:
+            return {"data": [{"attributes": {"value": "UNKNOWN ENTITY"}}]}
+        if "lei-records" in url:
+            return {"data": []}
+        return None
+
+    monkeypatch.setattr(worker, "_get_json", fake_get_json)
+    assert _resolve_lei("Unknown Corp") is None

@@ -43,6 +43,7 @@ PROC_RIPESTAT  = "company_intel_ripestat:processing"
 WORKER_NAME = "worker-intel"
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", 2))
 ST_KEY      = os.environ.get("SECURITYTRAILS_API_KEY", "")
+_LEI_PATTERN = re.compile(r"^[A-Z0-9]{20}$")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -147,6 +148,61 @@ def _post_json(url: str, headers: dict | None = None, body: dict | None = None) 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
+def _is_valid_lei(value: str | None) -> bool:
+    if not value:
+        return False
+    return bool(_LEI_PATTERN.fullmatch(value.strip().upper()))
+
+
+def _resolve_lei(company_name: str) -> str | None:
+    """
+    Resolve a company LEI across GLEIF response variants.
+    """
+    data = _get_json(
+        "https://api.gleif.org/api/v1/fuzzycompletions",
+        params={"field": "fulltext", "q": company_name},
+    )
+
+    candidate_names: list[str] = [company_name]
+    seen_names: set[str] = {company_name.strip().lower()}
+
+    if isinstance(data, dict):
+        for item in (data.get("data") or []):
+            if not isinstance(item, dict):
+                continue
+
+            maybe_lei = (item.get("id") or "").strip().upper()
+            if _is_valid_lei(maybe_lei):
+                return maybe_lei
+
+            value = ((item.get("attributes") or {}).get("value") or "").strip()
+            if value and value.lower() not in seen_names:
+                seen_names.add(value.lower())
+                candidate_names.append(value)
+
+    # One exact-name lookup plus up to four fuzzy candidates.
+    lookups = 0
+    for candidate in candidate_names:
+        if lookups >= 5:
+            break
+        lookups += 1
+
+        records = _get_json(
+            "https://api.gleif.org/api/v1/lei-records",
+            params={"filter[entity.legalName]": candidate, "page[size]": 1},
+        )
+        if not isinstance(records, dict):
+            continue
+        for record in (records.get("data") or []):
+            if not isinstance(record, dict):
+                continue
+            maybe_lei = (record.get("id") or "").strip().upper()
+            if _is_valid_lei(maybe_lei):
+                return maybe_lei
+
+    return None
+
+
 def _insert_domain(
     company_id: int,
     domain: str,
@@ -192,14 +248,11 @@ def handle_gleif(r, task: dict) -> None:
 
     entity_names: list[str] = [name]
 
-    data = _get_json(
-        "https://api.gleif.org/api/v1/fuzzycompletions",
-        params={"field": "fulltext", "q": name},
-    )
-    lei = None
-    if data and data.get("data"):
-        lei = data["data"][0]["id"]
+    lei = _resolve_lei(name)
+    if lei:
         logger.info("Company %d: GLEIF LEI=%s", company_id, lei)
+    else:
+        logger.info("Company %d: no GLEIF LEI match for %r", company_id, name)
 
     if lei:
         url: str | None = (
