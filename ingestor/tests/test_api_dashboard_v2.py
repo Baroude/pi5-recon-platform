@@ -607,3 +607,26 @@ def test_purge_target_no_data(client):
     assert body["files_deleted"] == 0
     with ingestor_app.db_conn() as conn:
         assert conn.execute("SELECT id FROM targets WHERE id = ?", (target_id,)).fetchone() is None
+
+
+@pytest.mark.parametrize(
+    ("path", "data_page"),
+    [
+        ("/ui/index.html", "dashboard"),
+        ("/ui/findings.html", "findings"),
+        ("/ui/targets.html", "targets"),
+        ("/ui/ops.html", "ops"),
+    ],
+)
+def test_shared_refresh_shell(client, path, data_page):
+    test_client, _, _, _ = client
+    res = test_client.get(path)
+    assert res.status_code == 200
+
+    html = res.text
+
+    assert f'<body data-page="{data_page}"' in html
+    assert '/ui/app.css' in html
+    assert '/ui/app.js' in html
+    assert 'class="topbar"' in html
+    assert 'aria-current="page"' in html

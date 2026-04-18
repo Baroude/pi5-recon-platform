@@ -20,7 +20,7 @@
           <a href="/ui/index.html">Dashboard</a>
           <a href="/ui/findings.html">Findings</a>
           <a href="/ui/targets.html">Targets</a>
-          <a class="is-active" href="/ui/ops.html">Ops</a>
+          <a class="is-active" href="/ui/ops.html" aria-current="page">Ops</a>
         </nav>
         <div class="status-meta">
           <span class="status-dot bad"></span>
@@ -33,16 +33,13 @@
       <div id="page-message" class="message" role="status" aria-live="polite"></div>
       <div id="stale-banner" class="message error stale-banner" role="alert"></div>
 
-      <section class="hero">
-        <span class="eyebrow">Recovery Console</span>
-        <div class="hero-row">
-          <div>
-            <h1>Queues, DLQ, and failed jobs in one place</h1>
-            <p>The Ops page is for recovery work. Queue depth and worker freshness refresh every 15 seconds; DLQ contents refresh only on explicit action so a requeue or dismiss is always operating on the raw payload you just saw.</p>
-          </div>
-          <div class="hero-actions">
-            <a href="/ui/index.html" role="button" class="secondary">Back to dashboard</a>
-          </div>
+      <section class="page-header panel">
+        <div class="page-header-copy">
+          <h1>Queues, DLQ, and failed jobs in one place</h1>
+          <p>Queue depth and worker freshness refresh every 15 seconds. DLQ contents only refresh on explicit action, so recovery uses the raw payload you just saw.</p>
+        </div>
+        <div class="page-header-actions">
+          <a href="/ui/index.html" role="button" class="secondary">Back to dashboard</a>
         </div>
       </section>
 

@@ -18,7 +18,7 @@
         </a>
         <nav class="nav-links" aria-label="Primary">
           <a href="/ui/index.html">Dashboard</a>
-          <a class="is-active" href="/ui/findings.html">Findings</a>
+          <a class="is-active" href="/ui/findings.html" aria-current="page">Findings</a>
           <a href="/ui/targets.html">Targets</a>
           <a href="/ui/ops.html">Ops</a>
         </nav>
@@ -33,16 +33,13 @@
       <div id="page-message" class="message" role="status" aria-live="polite"></div>
       <div id="stale-banner" class="message error stale-banner" role="alert"></div>
 
-      <section class="hero">
-        <span class="eyebrow">Triage Queue</span>
-        <div class="hero-row">
-          <div>
-            <h1>Keep findings moving</h1>
-            <p>This page is optimized for fast triage: filter aggressively, mark findings inline, and open the side panel only when you need the raw detail. The default view starts with open findings from the last 24 hours.</p>
-          </div>
-          <div class="hero-actions">
-            <a href="/ui/index.html" role="button" class="secondary">Back to dashboard</a>
-          </div>
+      <section class="page-header panel">
+        <div class="page-header-copy">
+          <h1>Keep findings moving</h1>
+          <p>Filter fast, update status inline, and open detail only when needed. The default view starts with open findings from the last 24 hours.</p>
+        </div>
+        <div class="page-header-actions">
+          <a href="/ui/index.html" role="button" class="secondary">Back to dashboard</a>
         </div>
       </section>
 
