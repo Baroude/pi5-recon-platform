@@ -14,6 +14,7 @@ Endpoints
   PATCH /targets/{id}        Update target scan configuration.
   POST /targets/{id}/run     Trigger an immediate recon enqueue for a target.
   DELETE /targets/{id}       Disable a target (sets enabled=0).
+  POST /targets/{id}/stop    Stop a target (disable + drain queues).
   GET  /targets/{id}/jobs    Recent jobs for a target.
   GET  /findings             Recent findings (supports severity/status/target/window filters).
   GET  /findings/{id}        Full finding details with best-effort raw nuclei event.
@@ -75,6 +76,7 @@ _redis: Optional[redis_lib.Redis] = None
 _refresh_thread: Optional[threading.Thread] = None
 
 _DLQ_QUEUES = ["recon_domain", "brute_domain", "probe_host", "scan_http", "notify_finding"]
+_ALL_QUEUES = ["recon_domain", "brute_domain", "probe_host", "scan_http", "notify_finding"]
 _ALLOWED_FINDING_STATUSES = {"open", "triaged", "false_positive", "fixed"}
 _ALLOWED_FINDING_SEVERITIES = {"critical", "high", "medium", "low", "info"}
 
@@ -177,6 +179,28 @@ def _decode_json_text(raw_text: Optional[str]) -> Any:
         return json.loads(raw_text)
     except Exception:
         return None
+
+
+def _drain_target_queues(r: redis_lib.Redis, scope_root: str) -> int:
+    """Remove all pending/processing queue entries for scope_root. Returns count removed."""
+    drained = 0
+    queue_lists = _ALL_QUEUES + [f"{q}:processing" for q in _ALL_QUEUES]
+    for queue in queue_lists:
+        items = r.lrange(queue, 0, -1)
+        for raw in items:
+            try:
+                payload = json.loads(raw if isinstance(raw, str) else raw.decode())
+                if payload.get("domain") == scope_root or payload.get("scope_root") == scope_root:
+                    drained += r.lrem(queue, 1, raw)
+            except Exception:
+                continue
+    inflight_keys = [
+        f"inflight:recon_domain:{scope_root}",
+        f"inflight:recon_domain:manual:{scope_root}",
+        f"inflight:brute_domain:brute:{scope_root}",
+    ]
+    r.delete(*inflight_keys)
+    return drained
 
 
 def _validate_queue_name(queue: str) -> str:
@@ -886,6 +910,19 @@ def disable_target(target_id: int):
             raise HTTPException(status_code=404, detail="Target not found")
         conn.execute("UPDATE targets SET enabled = 0 WHERE id = ?", (target_id,))
     return {"disabled": target_id}
+
+
+@app.post("/targets/{target_id}/stop", status_code=200)
+def stop_target(target_id: int):
+    with db_conn() as conn:
+        row = conn.execute("SELECT scope_root FROM targets WHERE id = ?", (target_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Target not found")
+        conn.execute("UPDATE targets SET enabled = 0 WHERE id = ?", (target_id,))
+    scope_root = row["scope_root"]
+    drained = _drain_target_queues(get_r(), scope_root)
+    logger.info("Stopped target %s — drained %d task(s)", scope_root, drained)
+    return {"stopped": True, "scope_root": scope_root, "tasks_drained": drained}
 
 
 @app.get("/targets/{target_id}/jobs")
