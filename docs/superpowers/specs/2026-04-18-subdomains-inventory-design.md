@@ -32,8 +32,10 @@ This feature adds a new dashboard page and extends the existing subdomain API co
   - last seen date
   - hostname
   - status (`online` / `offline`)
+- The hostname inventory table should include a **source** column.
 - Technology stack information should appear in a **detail panel**, not inline in the table.
 - Technology must also be a **filterable value**, for example to find only WordPress hosts.
+- Technology filtering should use a **dropdown**, not a free-text input.
 - Hostname status should be `online` if **any** endpoint under that subdomain is alive.
 
 ## Recommended Approach
@@ -100,6 +102,30 @@ Supported semantics:
 - `sort_by`: `last_seen`, `hostname`, `status`, `scope_root`
 - `sort_dir`: `asc` or `desc`
 
+### Technology Filter Options
+
+Because technology filtering is a dropdown rather than free-text search, the UI needs a distinct option list from the backend.
+
+Recommended approach:
+
+- add a lightweight `GET /subdomains/options` endpoint
+- return a normalized sorted list of distinct technology tags across the subdomain inventory
+- keep target options sourced from the existing target metadata/listing flow
+
+Recommended response shape:
+
+```json
+{
+  "technologies": ["amazon web services", "express", "nginx", "wordpress"]
+}
+```
+
+This is preferred over deriving options from the current table payload because:
+
+- the page should not need to fetch the full unfiltered inventory just to build a dropdown
+- the dropdown should stay stable even when the current result set is filtered
+- server-side technology filtering already depends on normalized backend values, so the same backend should define the option vocabulary
+
 ### Query Strategy
 
 Build the query from `subdomains s`:
@@ -126,11 +152,11 @@ The new page should use the same shell, tone, spacing system, and shared assets 
 
 ### Page Layout
 
-The page has three primary areas:
+The page has three primary concerns:
 
 1. A compact page header
 2. A filter/sort control bar
-3. A hostname inventory table with a detail panel
+3. A hostname inventory table whose row selection opens hostname detail in a centered modal dialog
 
 ### Page Header
 
@@ -142,10 +168,17 @@ The filter bar should support:
 
 - target filter
 - status filter: `all`, `online`, `offline`
-- technology filter
+- technology filter dropdown
 - hostname search
 - sort field
 - sort direction
+
+Technology filter behavior:
+
+- single-select dropdown in v1
+- values sourced from `GET /subdomains/options`
+- options sorted alphabetically using normalized tag values
+- one empty/default option for `all technologies`
 
 All filters should round-trip through URL query parameters so the page is refresh-safe and shareable.
 
@@ -157,15 +190,16 @@ Recommended columns:
 
 - hostname
 - target
+- source
 - status
 - last seen
 - endpoint count
 
 Technology tags should not appear inline in the table in v1. Keeping them out of the grid preserves scanability and avoids making the table visually noisy.
 
-### Detail Panel
+### Detail Modal
 
-Selecting a row opens a detail panel that shows:
+Selecting a row opens a centered modal dialog that shows:
 
 - hostname
 - scope root
@@ -176,7 +210,7 @@ Selecting a row opens a detail panel that shows:
 - endpoint summary counts
 - aggregated technology tags
 
-The panel should remain subdomain-centered. It may reference endpoint-derived summary data, but it should not turn into a per-endpoint inspector in v1.
+The modal should remain subdomain-centered. It may reference endpoint-derived summary data, but it should not turn into a per-endpoint inspector in v1.
 
 ## Backend Behavior
 
@@ -203,7 +237,7 @@ For v1, a single `technology` filter value is sufficient.
 
 ### Detail Data Loading
 
-The detail panel should not require an extra API request in v1 if the list payload already contains the required fields.
+The detail modal should not require an extra API request in v1 if the list payload already contains the required fields.
 
 If payload size becomes an issue later, the design can evolve to add `GET /subdomains/{id}` without changing the table model.
 
@@ -224,6 +258,7 @@ Add tests for:
 - hostname-level aggregation of `status`
 - `endpoint_count` and `alive_endpoint_count`
 - aggregated `technology_tags`
+- `GET /subdomains/options` returning normalized distinct technology values
 - filtering by `target_id`
 - filtering by `status`
 - filtering by `technology`
@@ -243,7 +278,7 @@ Verify:
 Confirm:
 
 - the global inventory loads successfully
-- selecting a row opens the detail panel
+- selecting a row opens the detail modal
 - filtering for a tag such as `wordpress` returns only matching hostnames
 - offline-only filtering correctly includes hostnames with zero live endpoints
 
@@ -260,4 +295,4 @@ The following are not part of this design:
 - endpoint drilldown UI
 - new freshness heuristics beyond persisted database state
 - frontend build tooling or framework migration
-- a separate dedicated inventory API endpoint
+- a separate dedicated inventory list endpoint replacing `GET /subdomains`
