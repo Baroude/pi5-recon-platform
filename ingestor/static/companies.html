@@ -23,6 +23,7 @@
           <a href="/ui/targets.html">Targets</a>
           <a class="is-active" href="/ui/companies.html" aria-current="page">Companies</a>
           <a href="/ui/ops.html">Ops</a>
+          <a href="/ui/logs.html">Logs</a>
         </nav>
         <div class="status-meta">
           <span class="status-dot good"></span>
@@ -44,12 +45,16 @@
 
         <section class="panel page-section">
           <form id="company-create-form" class="inline-form">
-            <div class="inline-form-grid">
+            <div class="inline-form-grid" style="grid-template-columns: 1fr 1fr auto;">
               <label>
                 Company name
                 <input id="company-name-input" placeholder="e.g. Kering" maxlength="200" required>
               </label>
               <label>
+                Seed domain <small style="opacity:.6">(optional but recommended)</small>
+                <input id="company-seed-input" placeholder="e.g. kering.com" type="text">
+              </label>
+              <label style="align-self:end">
                 &nbsp;
                 <button type="submit">Start discovery</button>
               </label>
@@ -127,8 +132,15 @@
             <div class="table-actions compact">
               <button id="approve-selected" disabled>Approve selected</button>
               <button id="reject-selected" class="secondary" disabled>Reject selected</button>
-              <button id="approve-all">Approve all</button>
+              <button id="approve-high">Approve all HIGH</button>
+              <button id="approve-all" class="secondary">Approve all</button>
             </div>
+          </div>
+          <div style="display:flex;gap:0.5rem;margin-bottom:0.75rem">
+            <button class="trust-filter-btn secondary is-active" data-trust="">All</button>
+            <button class="trust-filter-btn" data-trust="3" style="color:#22c55e">HIGH</button>
+            <button class="trust-filter-btn" data-trust="2" style="color:#f59e0b">MEDIUM</button>
+            <button class="trust-filter-btn" data-trust="1" style="color:#ef4444">LOW</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -136,12 +148,13 @@
                 <tr>
                   <th><input type="checkbox" id="pending-select-all" aria-label="Select all pending"></th>
                   <th>Domain</th>
+                  <th>Trust</th>
                   <th>IP</th>
-                  <th>Source ASN</th>
+                  <th>Source</th>
                 </tr>
               </thead>
               <tbody id="company-pending-body">
-                <tr><td colspan="4"><div class="empty-state">No pending domains.</div></td></tr>
+                <tr><td colspan="5"><div class="empty-state">No pending domains.</div></td></tr>
               </tbody>
             </table>
           </div>
@@ -177,6 +190,15 @@
       let selectedCompanyId = null;
       let selectedCompanyName = "";
       let pollTimer = null;
+      let activeTrustFilter = '';
+
+      const TRUST_LABELS = { 3: 'HIGH', 2: 'MEDIUM', 1: 'LOW' };
+      const TRUST_COLORS = { 3: '#22c55e', 2: '#f59e0b', 1: '#ef4444' };
+      function trustBadge(score) {
+        const label = TRUST_LABELS[score] || 'LOW';
+        const color = TRUST_COLORS[score] || '#ef4444';
+        return `<span style="color:${color};font-weight:600;font-size:.8rem">${label}</span>`;
+      }
 
       function setMessage(type, text) {
         messageEl.className = "message";
@@ -295,7 +317,7 @@
 
       function renderPendingDomains(rows) {
         if (!rows.length) {
-          pendingBody.innerHTML = '<tr><td colspan="4"><div class="empty-state">No pending domains.</div></td></tr>';
+          pendingBody.innerHTML = '<tr><td colspan="5"><div class="empty-state">No pending domains.</div></td></tr>';
           pendingSelectAll.checked = false;
           syncPendingSelectionButtons();
           return;
@@ -305,8 +327,9 @@
           <tr>
             <td><input class="pending-row-select" type="checkbox" value="${row.id}" aria-label="Select ${escapeHtml(row.domain)}"></td>
             <td><strong>${escapeHtml(row.domain)}</strong></td>
+            <td>${trustBadge(row.trust_score)}</td>
             <td>${escapeHtml(row.ip || "-")}</td>
-            <td>${escapeHtml(row.source_asn ? `AS${row.source_asn}` : "-")}</td>
+            <td>${escapeHtml(row.source || "-")}</td>
           </tr>
         `).join("");
 
@@ -319,9 +342,10 @@
       async function refreshCompanyDetail() {
         if (!selectedCompanyId) return;
 
+        const trustParam = activeTrustFilter ? `&trust=${activeTrustFilter}` : '';
         const [company, pending] = await Promise.all([
           api(`/companies/${selectedCompanyId}`),
-          api(`/companies/${selectedCompanyId}/pending?limit=500`),
+          api(`/companies/${selectedCompanyId}/pending?limit=500${trustParam}`),
         ]);
 
         document.getElementById("company-title").textContent = company.name;
@@ -384,9 +408,12 @@
         const name = companyNameInput.value.trim();
         if (!name) return;
         try {
-          await performAction("/companies", { name });
+          const seed = document.getElementById("company-seed-input").value.trim() || null;
+          await performAction("/companies", { name, seed_domain: seed });
           setMessage("success", `Discovery started for ${name}.`);
           companyNameInput.value = "";
+          const seedInput = document.getElementById("company-seed-input");
+          if (seedInput) seedInput.value = "";
           await refreshCompanies();
         } catch (error) {
           setMessage("error", error.message);
@@ -464,6 +491,18 @@
         }
       });
 
+      document.getElementById("approve-high").addEventListener("click", async () => {
+        if (!selectedCompanyId) return;
+        try {
+          await performAction(`/companies/${selectedCompanyId}/approve`, { min_trust: 3 });
+          setMessage("success", "Approved all HIGH-trust domains.");
+          pendingSelectAll.checked = false;
+          await refreshCompanyDetail();
+        } catch (error) {
+          setMessage("error", error.message);
+        }
+      });
+
       document.getElementById("approve-all").addEventListener("click", async () => {
         if (!selectedCompanyId) return;
         try {
@@ -474,6 +513,15 @@
         } catch (error) {
           setMessage("error", error.message);
         }
+      });
+
+      document.addEventListener("click", (e) => {
+        const btn = e.target.closest(".trust-filter-btn");
+        if (!btn) return;
+        document.querySelectorAll(".trust-filter-btn").forEach((b) => b.classList.remove("is-active"));
+        btn.classList.add("is-active");
+        activeTrustFilter = btn.dataset.trust;
+        refreshCompanyDetail().catch((error) => setMessage("error", error.message));
       });
 
       refreshCompanies().catch((error) => setMessage("error", error.message));
