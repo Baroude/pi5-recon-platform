@@ -625,8 +625,6 @@
 
     $("#confirm-delete-cancel").addEventListener("click", () => {
       confirmDeleteDialog.close();
-      _pendingDeleteId = null;
-      _pendingDeleteName = null;
     });
 
     $("#confirm-delete-confirm").addEventListener("click", async () => {
@@ -643,6 +641,11 @@
       } catch (error) {
         setMessage(message, "error", error.message);
       }
+    });
+
+    confirmDeleteDialog.addEventListener("close", () => {
+      _pendingDeleteId = null;
+      _pendingDeleteName = null;
     });
 
     async function refresh() {
@@ -781,6 +784,7 @@
         } catch (error) {
           setMessage(message, "error", error.message);
         }
+        return;
       }
 
       const deleteButton = event.target.closest("button[data-delete]");
