@@ -148,6 +148,29 @@ services:
   # --------------------------------------------------------------------------
   # HTTP worker — httpx probing → enqueues scan_http
   # --------------------------------------------------------------------------
+  # --------------------------------------------------------------------------
+  # Intel worker - amass intel org/ASN discovery -> discovered_domains staging
+  # Does NOT route through gluetun (intel queries are passive, not scanning).
+  # --------------------------------------------------------------------------
+  worker-intel:
+    <<: *worker-defaults
+    build:
+      context: .
+      dockerfile: workers/intel/Dockerfile
+      args:
+        CACHE_BUST: ${CACHE_BUST:-1}
+    platform: linux/arm64
+    networks:
+      - recon-net
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - SQLITE_PATH=${SQLITE_PATH:-/data/db/recon.db}
+      - INTEL_TIMEOUT_MINUTES=${INTEL_TIMEOUT_MINUTES:-10}
+      - LOG_DIR=/logs
+    volumes:
+      - /opt/recon-platform/data/db:/data/db
+      - /opt/recon-platform/logs:/logs
+
   worker-httpx:
     <<: *worker-defaults
     build:
