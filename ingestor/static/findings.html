@@ -105,54 +105,55 @@
         </form>
       </section>
 
-      <div class="split-grid">
-        <section class="panel">
-          <div class="panel-header">
-            <div>
-              <h2 class="panel-title">Findings table</h2>
-              <p>Click a row for full detail. Inline buttons update status without leaving the list.</p>
-            </div>
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Findings table</h2>
+            <p>Click a row for full detail. Inline buttons update status without leaving the list.</p>
           </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Severity</th>
-                  <th>Title</th>
-                  <th>Observed</th>
-                  <th>Target</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="findings-body"></tbody>
-            </table>
-          </div>
-        </section>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Severity</th>
+                <th>Title</th>
+                <th>Observed</th>
+                <th>Target</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="findings-body"></tbody>
+          </table>
+        </div>
+      </section>
 
-        <aside id="finding-detail" class="panel page-section finding-detail inspector-panel">
-          <div class="header-compact">
-            <div>
-              <h2 class="panel-title">Finding detail</h2>
-              <p class="muted">Template, URL, raw event, and status update.</p>
+      <dialog id="finding-dialog" class="finding-dialog">
+        <article>
+          <header class="finding-dialog-header">
+            <div class="finding-dialog-title-row">
+              <div id="finding-dialog-pills" class="finding-dialog-pills"></div>
+              <button type="button" id="detail-close" class="secondary">Close</button>
             </div>
-            <button type="button" id="detail-close" class="secondary">Close</button>
-          </div>
-          <div id="finding-detail-content" class="detail-meta">
-            <div class="empty-state">Select a finding row to inspect its detail.</div>
-          </div>
-          <label>
-            Update status
-            <select id="detail-status">
-              <option value="open">open</option>
-              <option value="triaged">triaged</option>
-              <option value="false_positive">false_positive</option>
-              <option value="fixed">fixed</option>
-            </select>
-          </label>
-          <button type="button" id="detail-save">Save status</button>
-        </aside>
-      </div>
+            <h2 id="finding-dialog-title" class="finding-dialog-title"></h2>
+            <div id="finding-dialog-meta-row" class="finding-dialog-meta-row"></div>
+          </header>
+          <div id="finding-detail-content"></div>
+          <footer class="finding-dialog-footer">
+            <label class="finding-status-label">
+              Update status
+              <select id="detail-status">
+                <option value="open">open</option>
+                <option value="triaged">triaged</option>
+                <option value="false_positive">false_positive</option>
+                <option value="fixed">fixed</option>
+              </select>
+            </label>
+            <button type="button" id="detail-save">Save status</button>
+          </footer>
+        </article>
+      </dialog>
     </main>
   </div>
 </body>

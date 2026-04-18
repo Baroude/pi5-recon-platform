@@ -386,7 +386,10 @@
     const staleBanner = $("#stale-banner");
     const updatedAt = $("#last-updated");
     const filtersForm = $("#findings-filters");
-    const detailCard = $("#finding-detail");
+    const findingDialog = $("#finding-dialog");
+    const dialogTitle = $("#finding-dialog-title");
+    const dialogPills = $("#finding-dialog-pills");
+    const dialogMetaRow = $("#finding-dialog-meta-row");
     const detailContent = $("#finding-detail-content");
     const detailStatus = $("#detail-status");
     const detailSave = $("#detail-save");
@@ -499,24 +502,44 @@
 
     async function openDetail(findingId) {
       state.activeFindingId = findingId;
-      detailCard.classList.add("is-open");
-      detailContent.innerHTML = "<p class='muted'>Loading detail...</p>";
+      dialogTitle.textContent = "";
+      dialogPills.innerHTML = "";
+      dialogMetaRow.innerHTML = "";
+      detailContent.innerHTML = "<p class='muted' style='padding:0.5rem 0'>Loading…</p>";
+      findingDialog.showModal();
       try {
         const detail = await api(`/findings/${findingId}`);
         detailStatus.value = detail.status || "open";
         detailSave.dataset.findingId = String(findingId);
+
+        dialogPills.innerHTML = severityPill(detail.severity) + findingStatusPill(detail.status);
+        dialogTitle.textContent = detail.title || "-";
+        dialogMetaRow.innerHTML = [
+          detail.scope_root || detail.hostname ? `<span class="meta-item"><span class="meta-label">Target</span> ${escapeHtml(detail.scope_root || detail.hostname)}</span>` : "",
+          detail.first_seen ? `<span class="meta-item"><span class="meta-label">Observed</span> ${escapeHtml(relTs(detail.first_seen))}</span>` : "",
+          detail.hostname && detail.hostname !== detail.scope_root ? `<span class="meta-item"><span class="meta-label">Host</span> <span class="mono">${escapeHtml(detail.hostname)}</span></span>` : "",
+        ].filter(Boolean).join("");
+
+        const fields = [
+          ["Template", `<span class="mono">${escapeHtml(detail.template_id || "-")}</span>`],
+          ["Matched at", `<span class="mono">${escapeHtml(detail.matched_at || "-")}</span>`],
+          ["URL", `<span class="mono">${escapeHtml(detail.url || "-")}</span>`],
+          ["First seen", escapeHtml(fmtTs(detail.first_seen))],
+        ];
+
         detailContent.innerHTML = `
-          <div class="detail-meta">
-            <div class="detail-meta-item"><strong>Title</strong><div>${escapeHtml(detail.title)}</div></div>
-            <div class="detail-meta-item"><strong>Template</strong><div class="mono">${escapeHtml(detail.template_id || "-")}</div></div>
-            <div class="detail-meta-item"><strong>Observed</strong><div>${escapeHtml(fmtTs(detail.first_seen))}</div></div>
-            <div class="detail-meta-item"><strong>Matched-at</strong><div class="mono">${escapeHtml(detail.matched_at || "-")}</div></div>
-            <div class="detail-meta-item"><strong>Target</strong><div>${escapeHtml(detail.scope_root || detail.hostname || "-")}</div></div>
-            <div class="detail-meta-item"><strong>URL</strong><div class="mono">${escapeHtml(detail.url || "-")}</div></div>
-            <div class="detail-meta-item"><strong>Status</strong><div>${findingStatusPill(detail.status)}</div></div>
+          <div class="finding-fields">
+            ${fields.map(([label, value]) => `
+              <div class="finding-field">
+                <div class="finding-field-label">${label}</div>
+                <div class="finding-field-value">${value}</div>
+              </div>
+            `).join("")}
           </div>
-          <h3>Raw Event</h3>
-          <pre>${escapeHtml(toJsonText(detail.raw_event || detail.raw_event_error || "No raw event available."))}</pre>
+          <div class="finding-raw-section">
+            <h3>Raw event</h3>
+            <pre>${escapeHtml(toJsonText(detail.raw_event || detail.raw_event_error || "No raw event available."))}</pre>
+          </div>
         `;
       } catch (error) {
         detailContent.innerHTML = `<div class="empty-state">Failed to load finding detail: ${escapeHtml(error.message)}</div>`;
@@ -526,7 +549,7 @@
     function closeDetail() {
       state.activeFindingId = null;
       detailSave.dataset.findingId = "";
-      detailCard.classList.remove("is-open");
+      findingDialog.close();
     }
 
     async function patchFinding(findingId, status) {
@@ -594,6 +617,7 @@
     });
 
     detailClose.addEventListener("click", () => closeDetail());
+    findingDialog.addEventListener("click", (e) => { if (e.target === findingDialog) closeDetail(); });
 
     syncControls();
     loadTargets()
