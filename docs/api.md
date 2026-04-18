@@ -89,6 +89,48 @@ Response shape:
 
 Disable target (data is retained).
 
+### POST `/targets/{target_id}/stop`
+
+Disable target and drain all pending queue entries for it across all pipeline stages.
+
+In-flight subprocesses (actively running subfinder/nuclei) finish naturally; workers skip downstream enqueuing once they see `enabled=0`.
+
+Response (`200`):
+
+```json
+{
+  "stopped": true,
+  "scope_root": "example.com",
+  "tasks_drained": 3
+}
+```
+
+Responses:
+- `200`: stopped (idempotent — safe to call on already-disabled targets)
+- `404`: unknown target
+
+---
+
+### POST `/targets/{target_id}/purge`
+
+Hard-delete a target and all associated data: subdomains, endpoints, findings, notifications, jobs, failed jobs, Redis queue entries, dedup keys, and raw output files on disk.
+
+**This is irreversible.**
+
+Response (`200`):
+
+```json
+{
+  "purged": true,
+  "scope_root": "example.com",
+  "files_deleted": 4
+}
+```
+
+Responses:
+- `200`: purged
+- `404`: unknown target
+
 ### GET `/targets/{target_id}/jobs`
 
 Get recent jobs for a target.
