@@ -1,4 +1,5 @@
 import importlib
+import json
 import sys
 import types
 from pathlib import Path
@@ -501,7 +502,6 @@ def test_stop_target_disables_and_drains(client):
     target_id = _insert_target(ingestor_app, scope_root="stop.example.com", enabled=1)
 
     # Pre-populate queues with tasks for this target and a different target
-    import json
     fake_redis.lpush("recon_domain", json.dumps({"domain": "stop.example.com"}))
     fake_redis.lpush("recon_domain", json.dumps({"domain": "other.example.com"}))
     fake_redis.lpush("probe_host", json.dumps({"hostname": "sub.stop.example.com", "scope_root": "stop.example.com"}))
@@ -537,3 +537,6 @@ def test_stop_target_already_disabled_is_idempotent(client):
     res = test_client.post(f"/targets/{target_id}/stop")
     assert res.status_code == 200
     assert res.json()["stopped"] is True
+    with ingestor_app.db_conn() as conn:
+        row = conn.execute("SELECT enabled FROM targets WHERE id = ?", (target_id,)).fetchone()
+    assert row["enabled"] == 0
