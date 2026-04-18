@@ -19,7 +19,7 @@
         <nav class="nav-links" aria-label="Primary">
           <a href="/ui/index.html">Dashboard</a>
           <a href="/ui/findings.html">Findings</a>
-          <a class="is-active" href="/ui/targets.html">Targets</a>
+          <a class="is-active" href="/ui/targets.html" aria-current="page">Targets</a>
           <a href="/ui/ops.html">Ops</a>
         </nav>
         <div class="status-meta">
@@ -32,20 +32,17 @@
     <main>
       <div id="page-message" class="message" role="status" aria-live="polite"></div>
 
-      <section class="hero">
-        <span class="eyebrow">Scope Control</span>
-        <div class="hero-row">
-          <div>
-            <h1>Manage targets without touching the API</h1>
-            <p>Targets are now a dedicated page. Create new scope roots, tune recon settings, run a target immediately, and disable stale entries without mixing those actions into the operations dashboard.</p>
-          </div>
-          <div class="hero-actions">
-            <a href="/ui/index.html" role="button" class="secondary">Back to dashboard</a>
-          </div>
+      <section class="page-header panel">
+        <div class="page-header-copy">
+          <h1>Manage targets without touching the API</h1>
+          <p>Create scope roots, tune recon settings, run a target, and disable stale entries without mixing those actions into the ops view.</p>
+        </div>
+        <div class="page-header-actions">
+          <a href="/ui/index.html" role="button" class="secondary">Back to dashboard</a>
         </div>
       </section>
 
-      <details class="panel" open>
+      <details class="panel page-section form-panel" open>
         <summary><strong>Create target</strong></summary>
         <form id="create-target-form" class="inline-form" style="margin-top:1rem">
           <div class="inline-form-grid">
@@ -104,7 +101,7 @@
       </section>
     </main>
 
-    <dialog id="target-dialog" class="target-dialog">
+    <dialog id="target-dialog" class="target-dialog inspector-panel">
       <article>
         <header>
           <h2>Edit target</h2>
@@ -142,7 +139,7 @@
       </article>
     </dialog>
 
-    <dialog id="confirm-delete-dialog" class="target-dialog">
+    <dialog id="confirm-delete-dialog" class="target-dialog inspector-panel">
       <article>
         <header>
           <h2>Delete target?</h2>
