@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-ROOT = Path(r"C:\Users\Mathias\Documents\pi\.worktrees\feature\dashboard-ui-refresh")
+ROOT = Path(__file__).resolve().parents[2]
 INGESTOR_DIR = ROOT / "ingestor"
 WORKERS_DIR = ROOT / "workers"
 
@@ -624,13 +624,12 @@ def test_shared_refresh_shell(client, path, data_page):
     assert res.status_code == 200
 
     html = res.text
-    source_html = (Path.cwd() / "ingestor" / "static" / Path(path).name).read_text(encoding="utf-8")
 
     assert f'<body data-page="{data_page}"' in html
     assert '/ui/app.css' in html
     assert '/ui/app.js' in html
     assert 'class="topbar"' in html
-    assert ('class="page-header"' in source_html) or ('class="hero"' in source_html)
-    assert ('class="page-header-copy"' in source_html) or ('class="hero-row"' in source_html)
-    assert ('class="page-header-actions"' in source_html) or ('class="hero-actions"' in source_html)
+    assert 'class="page-header panel"' in html
+    assert 'class="page-header-copy"' in html
+    assert 'class="page-header-actions"' in html
     assert 'aria-current="page"' in html
