@@ -79,28 +79,51 @@ logger.addHandler(logging.FileHandler(os.path.join(_LOG_DIR, "worker-intel.log")
 def _run_amass(cmd: list[str]) -> list[str]:
     """Run amass command and return non-empty stdout lines."""
     logger.info("Running: %s", " ".join(cmd))
+    lines: list[str] = []
+    line_lock = threading.Lock()
+
+    def _pump_stream(stream) -> None:
+        if stream is None:
+            return
+        for raw_line in iter(stream.readline, ""):
+            line = raw_line.strip()
+            if not line:
+                continue
+            logger.info("%s", line)
+            with line_lock:
+                lines.append(line)
+
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=TIMEOUT_MINUTES * 60 + 30,
+            bufsize=1,
         )
-    except subprocess.TimeoutExpired:
-        logger.error("amass timed out after %d minute(s)", TIMEOUT_MINUTES)
-        return []
+        stdout_thread = threading.Thread(target=_pump_stream, args=(proc.stdout,), daemon=True)
+        stderr_thread = threading.Thread(target=_pump_stream, args=(proc.stderr,), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+
+        try:
+            proc.wait(timeout=TIMEOUT_MINUTES * 60 + 30)
+        except subprocess.TimeoutExpired:
+            logger.error("amass timed out after %d minute(s)", TIMEOUT_MINUTES)
+            proc.kill()
+            stdout_thread.join(timeout=5)
+            stderr_thread.join(timeout=5)
+            return []
+
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
     except FileNotFoundError:
         logger.error("amass binary not found")
         return []
 
-    stdout_lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
-    stderr_lines = [line.strip() for line in (result.stderr or "").splitlines() if line.strip()]
-    if result.returncode not in (0, 1):
-        logger.warning("amass exited %d", result.returncode)
-    if stderr_lines and result.returncode != 0:
-        logger.warning("amass stderr (first lines): %s", " | ".join(stderr_lines[:3]))
-    # Some amass modes emit useful lines on stderr; keep them as fallback context.
-    return stdout_lines + [line for line in stderr_lines if line not in stdout_lines]
+    if proc.returncode not in (0, 1):
+        logger.warning("amass exited %d", proc.returncode)
+    return lines
 
 
 def _extract_asn_record(line: str) -> tuple[str, str] | None:

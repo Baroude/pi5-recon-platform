@@ -1190,6 +1190,292 @@
     });
   }
 
+  function initLogs() {
+    const message = $("#page-message");
+    const updatedAt = $("#last-updated");
+    const workerSelect = $("#logs-worker-select");
+    const output = $("#logs-output");
+    const statusEl = $("#logs-connection-status");
+    const fullHistoryButton = $("#logs-full-history");
+    const clearButton = $("#logs-clear");
+    const jumpButton = $("#logs-jump-bottom");
+
+    let activeWorker = "";
+    let activeToken = 0;
+    let eventSource = null;
+    let reconnectTimer = null;
+    let reconnectDelayMs = 1000;
+    let isAtBottom = true;
+    let lastStreamOffset = null;
+
+    function setStatus(text, tone = "") {
+      if (!statusEl) return;
+      statusEl.className = "logs-status";
+      if (tone) {
+        statusEl.classList.add(tone);
+      }
+      statusEl.textContent = text;
+    }
+
+    function clearReconnectTimer() {
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    }
+
+    function closeStream() {
+      clearReconnectTimer();
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+    }
+
+    function updateJumpButton() {
+      if (!jumpButton) return;
+      jumpButton.hidden = isAtBottom || !output || !output.children.length;
+    }
+
+    function scrollToBottom() {
+      if (!output) return;
+      output.scrollTop = output.scrollHeight;
+      isAtBottom = true;
+      updateJumpButton();
+    }
+
+    function syncScrollState() {
+      if (!output) return;
+      const distanceFromBottom = output.scrollHeight - output.scrollTop - output.clientHeight;
+      isAtBottom = distanceFromBottom <= 24;
+      updateJumpButton();
+    }
+
+    function classifyLine(line) {
+      const text = String(line || "");
+      if (/\bERROR\b/i.test(text)) return "log-error";
+      if (/\bWARNING\b|\bWARN\b/i.test(text)) return "log-warning";
+      return "";
+    }
+
+    function renderEmpty(text) {
+      output.replaceChildren();
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.textContent = text;
+      output.appendChild(empty);
+      isAtBottom = true;
+      updateJumpButton();
+    }
+
+    function appendLine(text) {
+      if (!output) return;
+      if (output.querySelector(".empty-state")) {
+        output.replaceChildren();
+      }
+      const line = document.createElement("div");
+      line.className = `logs-line ${classifyLine(text)}`.trim();
+      line.textContent = text;
+      output.appendChild(line);
+      if (isAtBottom) {
+        scrollToBottom();
+      } else {
+        updateJumpButton();
+      }
+    }
+
+    function renderLines(lines) {
+      output.replaceChildren();
+      const fragment = document.createDocumentFragment();
+      if (!lines.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty-state";
+        empty.textContent = "No log lines available for this worker.";
+        fragment.appendChild(empty);
+        output.appendChild(fragment);
+        isAtBottom = true;
+        updateJumpButton();
+        return;
+      }
+
+      lines.forEach((line) => {
+        const el = document.createElement("div");
+        el.className = `logs-line ${classifyLine(line)}`.trim();
+        el.textContent = line;
+        fragment.appendChild(el);
+      });
+      output.appendChild(fragment);
+      scrollToBottom();
+    }
+
+    function scheduleReconnect(token) {
+      if (!activeWorker || activeToken !== token || reconnectTimer) {
+        return;
+      }
+      const delay = reconnectDelayMs;
+      setStatus(`Connection lost. Reconnecting in ${Math.round(delay / 1000)}s.`, "warn");
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        if (activeToken !== token || activeWorker === "") {
+          return;
+        }
+        connectStream(activeWorker, token, lastStreamOffset);
+      }, delay);
+      reconnectDelayMs = Math.min(reconnectDelayMs * 2, 30000);
+    }
+
+    function connectStream(worker, token, offset = null) {
+      clearReconnectTimer();
+      if (activeToken !== token || worker !== activeWorker) {
+        return;
+      }
+
+      if (eventSource) {
+        eventSource.close();
+      }
+
+      setStatus("Connecting to live stream...", "warn");
+      const streamPath = offset != null
+        ? `/logs/${encodeURIComponent(worker)}/stream?offset=${encodeURIComponent(String(offset))}`
+        : `/logs/${encodeURIComponent(worker)}/stream`;
+      const source = new EventSource(streamPath);
+      eventSource = source;
+
+      source.onopen = () => {
+        if (activeToken !== token || worker !== activeWorker) {
+          source.close();
+          return;
+        }
+        reconnectDelayMs = 1000;
+        setStatus("Live", "success");
+        setUpdatedAt(updatedAt, Date.now());
+      };
+
+      source.onmessage = (event) => {
+        if (activeToken !== token || worker !== activeWorker) {
+          return;
+        }
+        const eventOffset = Number(event.lastEventId);
+        if (Number.isFinite(eventOffset)) {
+          lastStreamOffset = eventOffset;
+        }
+        appendLine(event.data);
+      };
+
+      source.onerror = () => {
+        if (activeToken !== token || worker !== activeWorker) {
+          source.close();
+          return;
+        }
+        source.close();
+        eventSource = null;
+        scheduleReconnect(token);
+      };
+    }
+
+    async function loadWorker(worker, lines, { refreshStream = true } = {}) {
+      if (!worker) {
+        renderEmpty("Select a worker to load logs.");
+        setStatus("No worker selected", "muted");
+        closeStream();
+        return;
+      }
+
+      const token = ++activeToken;
+      activeWorker = worker;
+      closeStream();
+      setStatus(lines === 0 ? "Loading full history..." : "Loading recent history...", "warn");
+      renderEmpty("Loading log lines...");
+
+      try {
+        const response = await fetch(`/logs/${encodeURIComponent(worker)}?lines=${lines}`, {
+          headers: { Accept: "application/json" },
+        });
+        const rawText = await response.text();
+        const payload = rawText ? safeJson(rawText) : null;
+        if (!response.ok) {
+          const detail = payload && typeof payload === "object" ? payload.detail || payload.message : rawText;
+          throw new Error(typeof detail === "string" ? detail : response.statusText);
+        }
+        const offsetHeader = response.headers.get("x-log-offset");
+        const logOffset = offsetHeader == null ? null : Number(offsetHeader);
+
+        if (activeToken !== token || worker !== activeWorker) {
+          return;
+        }
+        renderLines(Array.isArray(payload?.lines) ? payload.lines : []);
+        lastStreamOffset = Number.isFinite(logOffset) ? logOffset : null;
+        setUpdatedAt(updatedAt, Date.now());
+        if (refreshStream) {
+          connectStream(worker, token, lastStreamOffset);
+        }
+      } catch (error) {
+        if (activeToken !== token || worker !== activeWorker) {
+          return;
+        }
+        setStatus("Load failed", "error");
+        renderEmpty(`Failed to load logs: ${error.message}`);
+        setMessage(message, "error", error.message);
+      }
+    }
+
+    async function loadWorkers() {
+      try {
+        const payload = await api("/logs");
+        const workers = Array.isArray(payload?.workers) ? payload.workers : [];
+        workerSelect.innerHTML = workers.length
+          ? workers.map((worker) => `<option value="${escapeHtml(worker)}">${escapeHtml(worker)}</option>`).join("")
+          : '<option value="">No workers available</option>';
+        workerSelect.disabled = workers.length === 0;
+        fullHistoryButton.disabled = workers.length === 0;
+        clearButton.disabled = workers.length === 0;
+        if (!workers.length) {
+          renderEmpty("No worker log files were found.");
+          setStatus("No workers available", "muted");
+          return;
+        }
+
+        const query = new URLSearchParams(window.location.search);
+        const preferredWorker = query.get("worker");
+        const initialWorker = preferredWorker && workers.includes(preferredWorker) ? preferredWorker : workers[0];
+        workerSelect.value = initialWorker;
+        await loadWorker(initialWorker, 500);
+      } catch (error) {
+        renderEmpty(`Failed to load workers: ${error.message}`);
+        setStatus("Worker load failed", "error");
+        setMessage(message, "error", error.message);
+      }
+    }
+
+    if (output) {
+      output.addEventListener("scroll", syncScrollState);
+    }
+
+    workerSelect.addEventListener("change", () => {
+      loadWorker(workerSelect.value, 500);
+    });
+
+    fullHistoryButton.addEventListener("click", () => {
+      if (workerSelect.value) {
+        loadWorker(workerSelect.value, 0);
+      }
+    });
+
+    clearButton.addEventListener("click", () => {
+      renderEmpty("Log view cleared. Live lines will keep appending.");
+      setStatus(activeWorker ? `Live tail for ${activeWorker}` : "No worker selected", activeWorker ? "success" : "muted");
+      if (activeWorker) {
+        scrollToBottom();
+      }
+    });
+
+    jumpButton.addEventListener("click", () => {
+      scrollToBottom();
+    });
+
+    loadWorkers();
+  }
+
   function renderQueueDepths(queues) {
     const tbody = $("#queue-depths-body");
     tbody.innerHTML = STAGES.map((queueName) => {
@@ -1280,5 +1566,6 @@
     if (page === "subdomains") initSubdomains();
     if (page === "targets") initTargets();
     if (page === "ops") initOps();
+    if (page === "logs") initLogs();
   });
 })();

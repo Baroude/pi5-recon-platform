@@ -106,6 +106,7 @@ def app_ctx(tmp_path, monkeypatch):
     monkeypatch.setenv("INGESTOR_DISABLE_STARTUP", "1")
     monkeypatch.setenv("SQLITE_PATH", str(tmp_path / "recon.db"))
     monkeypatch.setenv("DEFAULT_RECON_INTERVAL_HOURS", "24")
+    monkeypatch.setenv("LOG_DIR", str(tmp_path))
 
     if "app" in sys.modules:
         del sys.modules["app"]
@@ -280,6 +281,111 @@ def _insert_notification(ingestor_app, finding_id):
             "INSERT INTO notifications (finding_id, channel, delivery_status) VALUES (?, ?, ?)",
             (finding_id, "telegram", "sent"),
         ).lastrowid
+
+
+def _write_log_file(log_dir: Path, worker: str, lines: list[str]) -> Path:
+    path = log_dir / f"{worker}.log"
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return path
+
+
+def test_list_logs_empty(client):
+    test_client, _, _, _ = client
+
+    res = test_client.get("/logs")
+    assert res.status_code == 200
+    assert res.json() == {"workers": []}
+
+
+def test_list_logs_worker_names(client):
+    test_client, ingestor_app, _, _ = client
+    _write_log_file(Path(ingestor_app.LOG_DIR), "worker-bravo", ["b-1"])
+    _write_log_file(Path(ingestor_app.LOG_DIR), "worker-alpha", ["a-1"])
+    (Path(ingestor_app.LOG_DIR) / "not-a-log.txt").write_text("ignore\n", encoding="utf-8")
+    _write_log_file(Path(ingestor_app.LOG_DIR), "ingestor", ["ingestor-line"])
+
+    res = test_client.get("/logs")
+    assert res.status_code == 200
+    assert res.json() == {"workers": ["worker-alpha", "worker-bravo"]}
+
+
+def test_get_log_lines_last_n(client):
+    test_client, ingestor_app, _, _ = client
+    _write_log_file(Path(ingestor_app.LOG_DIR), "worker-a", ["line-1", "line-2", "line-3"])
+
+    res = test_client.get("/logs/worker-a?lines=2")
+    assert res.status_code == 200
+    assert res.json() == {"lines": ["line-2", "line-3"]}
+    assert int(res.headers["x-log-offset"]) >= 0
+
+
+def test_get_log_lines_all(client):
+    test_client, ingestor_app, _, _ = client
+    _write_log_file(Path(ingestor_app.LOG_DIR), "worker-b", ["line-1", "line-2", "line-3"])
+
+    res = test_client.get("/logs/worker-b?lines=0")
+    assert res.status_code == 200
+    assert res.json() == {"lines": ["line-1", "line-2", "line-3"]}
+
+
+def test_get_log_lines_not_found(client):
+    test_client, _, _, _ = client
+
+    res = test_client.get("/logs/worker-missing")
+    assert res.status_code == 404
+
+
+def test_get_log_lines_invalid_worker(client):
+    test_client, _, _, _ = client
+
+    res = test_client.get("/logs/bad.worker")
+    assert res.status_code == 400
+
+
+def test_get_log_lines_rejects_non_worker_name(client):
+    test_client, _, _, _ = client
+
+    res = test_client.get("/logs/ingestor")
+    assert res.status_code == 400
+
+
+def test_stream_log_not_found(client):
+    test_client, _, _, _ = client
+
+    res = test_client.get("/logs/worker-missing/stream")
+    assert res.status_code == 404
+
+
+def test_stream_log_invalid_worker(client):
+    test_client, _, _, _ = client
+
+    res = test_client.get("/logs/bad.worker/stream")
+    assert res.status_code == 400
+
+
+def test_stream_log_rejects_non_worker_name(client):
+    test_client, _, _, _ = client
+
+    res = test_client.get("/logs/ingestor/stream")
+    assert res.status_code == 400
+
+
+def test_stream_log_headers_include_event_stream(client, monkeypatch):
+    test_client, ingestor_app, _, _ = client
+    _write_log_file(Path(ingestor_app.LOG_DIR), "worker-stream", ["seed"])
+
+    checks = iter([False, True])
+
+    async def _disconnected(_self):
+        return next(checks, True)
+
+    monkeypatch.setattr("starlette.requests.Request.is_disconnected", _disconnected)
+
+    with test_client.stream("GET", "/logs/worker-stream/stream") as res:
+        assert res.status_code == 200
+        assert "text/event-stream" in res.headers["content-type"]
+        assert res.headers["cache-control"] == "no-cache"
+        assert res.headers["x-accel-buffering"] == "no"
 
 
 def test_run_target_now_enqueues_for_enabled_target(client):
@@ -965,6 +1071,7 @@ def test_purge_target_no_data(client):
         ("/ui/targets.html", "targets"),
         ("/ui/companies.html", "companies"),
         ("/ui/ops.html", "ops"),
+        ("/ui/logs.html", "logs"),
     ],
 )
 def test_shared_refresh_shell(client, path, data_page):
@@ -993,6 +1100,7 @@ def test_shared_refresh_shell(client, path, data_page):
         "/ui/targets.html": "/ui/targets.html",
         "/ui/companies.html": "/ui/companies.html",
         "/ui/ops.html": "/ui/ops.html",
+        "/ui/logs.html": "/ui/logs.html",
     }[path]
 
     assert f'<body data-page="{data_page}"' in html
@@ -1007,6 +1115,7 @@ def test_shared_refresh_shell(client, path, data_page):
     assert 'class="page-header-copy"' in html
     assert 'class="page-header-actions"' in html
     assert '/ui/companies.html' in nav_html
+    assert '/ui/logs.html' in nav_html
     assert len(current_links) == 1
     assert current_links[0] == expected_current_href
 
@@ -1040,6 +1149,7 @@ def test_refresh_tokens_and_layout_hooks(client):
         "/ui/targets.html",
         "/ui/companies.html",
         "/ui/ops.html",
+        "/ui/logs.html",
     ],
 )
 def test_dense_layout_hooks(client, path):
@@ -1141,6 +1251,21 @@ def test_dense_layout_hooks(client, path):
 
         failed_jobs_match = re.search(r'<tbody\b[^>]*id="failed-jobs-body"[^>]*>', html)
         assert failed_jobs_match is not None
+    elif path == "/ui/logs.html":
+        section_match = re.search(r'<section\b[^>]*class="([^"]+)"[^>]*>\s*<div class="page-header-copy">', html, re.S)
+        assert section_match is not None
+        section_tokens = set(section_match.group(1).split())
+        assert {"page-header", "panel", "page-section"} <= section_tokens
+
+        toolbar_match = re.search(r'<div\b[^>]*class="([^"]+)"[^>]*>\s*<label class="logs-worker-select">', html, re.S)
+        assert toolbar_match is not None
+        toolbar_tokens = set(toolbar_match.group(1).split())
+        assert "logs-toolbar" in toolbar_tokens
+
+        output_match = re.search(r'<div\b[^>]*id="logs-output"[^>]*class="([^"]+)"[^>]*>', html)
+        assert output_match is not None
+        output_tokens = set(output_match.group(1).split())
+        assert "logs-output" in output_tokens
 
 
 # ---------------------------------------------------------------------------
