@@ -619,6 +619,32 @@
     const metaPromise = api("/admin/meta");
     let metaCache = null;
 
+    const confirmDeleteDialog = $("#confirm-delete-dialog");
+    let _pendingDeleteId = null;
+    let _pendingDeleteName = null;
+
+    $("#confirm-delete-cancel").addEventListener("click", () => {
+      confirmDeleteDialog.close();
+      _pendingDeleteId = null;
+      _pendingDeleteName = null;
+    });
+
+    $("#confirm-delete-confirm").addEventListener("click", async () => {
+      confirmDeleteDialog.close();
+      const targetId = _pendingDeleteId;
+      const scopeRoot = _pendingDeleteName;
+      _pendingDeleteId = null;
+      _pendingDeleteName = null;
+      if (!targetId) return;
+      try {
+        await api(`/targets/${targetId}/purge`, { method: "POST" });
+        setMessage(message, "success", `Deleted ${scopeRoot} and all associated data.`);
+        await refresh();
+      } catch (error) {
+        setMessage(message, "error", error.message);
+      }
+    });
+
     async function refresh() {
       const [meta, targets] = await Promise.all([metaCache ? Promise.resolve(metaCache) : metaPromise, api("/targets")]);
       metaCache = meta;
@@ -755,6 +781,15 @@
         } catch (error) {
           setMessage(message, "error", error.message);
         }
+      }
+
+      const deleteButton = event.target.closest("button[data-delete]");
+      if (deleteButton) {
+        _pendingDeleteId = deleteButton.dataset.delete;
+        _pendingDeleteName = deleteButton.dataset.name;
+        $("#confirm-delete-name").textContent = _pendingDeleteName;
+        confirmDeleteDialog.showModal();
+        return;
       }
     });
 
