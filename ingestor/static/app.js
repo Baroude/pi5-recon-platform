@@ -1,11 +1,21 @@
 (() => {
-  const STAGES = ["recon_domain", "brute_domain", "probe_host", "scan_http", "notify_finding"];
+  const STAGES = [
+    "recon_domain",
+    "brute_domain",
+    "probe_host",
+    "scan_http",
+    "notify_finding",
+    "company_intel",
+    "company_intel_asn",
+  ];
   const STAGE_LABELS = {
     recon_domain: "Recon",
     brute_domain: "DNS Brute",
     probe_host: "HTTP Probe",
     scan_http: "Nuclei",
     notify_finding: "Notify",
+    company_intel: "Company Intel",
+    company_intel_asn: "Company ASN",
   };
   const FINDING_STATUSES = ["open", "triaged", "false_positive", "fixed"];
   const FINDING_SEVERITIES = ["critical", "high", "medium", "low", "info"];

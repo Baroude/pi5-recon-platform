@@ -963,6 +963,7 @@ def test_purge_target_no_data(client):
         ("/ui/findings.html", "findings"),
         ("/ui/subdomains.html", "subdomains"),
         ("/ui/targets.html", "targets"),
+        ("/ui/companies.html", "companies"),
         ("/ui/ops.html", "ops"),
     ],
 )
@@ -990,6 +991,7 @@ def test_shared_refresh_shell(client, path, data_page):
         "/ui/findings.html": "/ui/findings.html",
         "/ui/subdomains.html": "/ui/subdomains.html",
         "/ui/targets.html": "/ui/targets.html",
+        "/ui/companies.html": "/ui/companies.html",
         "/ui/ops.html": "/ui/ops.html",
     }[path]
 
@@ -1004,6 +1006,7 @@ def test_shared_refresh_shell(client, path, data_page):
     assert "panel" in header_tokens
     assert 'class="page-header-copy"' in html
     assert 'class="page-header-actions"' in html
+    assert '/ui/companies.html' in nav_html
     assert len(current_links) == 1
     assert current_links[0] == expected_current_href
 
@@ -1035,6 +1038,7 @@ def test_refresh_tokens_and_layout_hooks(client):
         "/ui/findings.html",
         "/ui/subdomains.html",
         "/ui/targets.html",
+        "/ui/companies.html",
         "/ui/ops.html",
     ],
 )
@@ -1116,6 +1120,17 @@ def test_dense_layout_hooks(client, path):
 
         body_match = re.search(r'<tbody\b[^>]*id="targets-body"[^>]*>', html)
         assert body_match is not None
+    elif path == "/ui/companies.html":
+        form_match = re.search(r'<form\b[^>]*id="company-create-form"[^>]*class="([^"]+)"[^>]*>', html)
+        assert form_match is not None
+        form_tokens = set(form_match.group(1).split())
+        assert {"inline-form"} <= form_tokens
+
+        companies_match = re.search(r'<tbody\b[^>]*id="companies-body"[^>]*>', html)
+        assert companies_match is not None
+
+        pending_match = re.search(r'<tbody\b[^>]*id="company-pending-body"[^>]*>', html)
+        assert pending_match is not None
     elif path == "/ui/ops.html":
         section_matches = re.findall(r'<section\b[^>]*class="([^"]+)"[^>]*>', html)
         assert any({"panel", "page-section"} <= set(tokens.split()) for tokens in section_matches)
