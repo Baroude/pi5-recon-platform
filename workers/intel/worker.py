@@ -50,6 +50,11 @@ TIMEOUT_MINUTES = int(os.environ.get("INTEL_TIMEOUT_MINUTES", 10))
 
 # Pass 1 output format (common case): "12345, EXAMPLE-NET -- Example Corp"
 _ASN_RE = re.compile(r"^(\d+),\s*(.+)$")
+_ASN_PREFIX_RE = re.compile(
+    r"^(?:AS|ASN)\s*[:#]?\s*(\d{1,10})\b(?:\s*[-,:]\s*(.+))?$",
+    re.IGNORECASE,
+)
+_ASN_INLINE_RE = re.compile(r"\b(?:AS|ASN)\s*[:#]?\s*(\d{1,10})\b", re.IGNORECASE)
 # Pass 2 output format (common case): "example.com 1.2.3.4" or "example.com"
 _DOMAIN_RE = re.compile(
     r"^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)"
@@ -88,11 +93,46 @@ def _run_amass(cmd: list[str]) -> list[str]:
         logger.error("amass binary not found")
         return []
 
+    stdout_lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+    stderr_lines = [line.strip() for line in (result.stderr or "").splitlines() if line.strip()]
     if result.returncode not in (0, 1):
-        stderr = (result.stderr or "").strip()
-        logger.warning("amass exited %d: %s", result.returncode, stderr[:500])
+        logger.warning("amass exited %d", result.returncode)
+    if stderr_lines and result.returncode != 0:
+        logger.warning("amass stderr (first lines): %s", " | ".join(stderr_lines[:3]))
+    # Some amass modes emit useful lines on stderr; keep them as fallback context.
+    return stdout_lines + [line for line in stderr_lines if line not in stdout_lines]
 
-    return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+
+def _extract_asn_record(line: str) -> tuple[str, str] | None:
+    """
+    Best-effort ASN parsing across multiple amass output formats.
+    Returns (asn, description) when recognized.
+    """
+    cleaned = " ".join(line.split())
+    if not cleaned:
+        return None
+
+    # Common format: "12345, ORG -- Description"
+    comma_match = _ASN_RE.match(cleaned)
+    if comma_match:
+        asn = comma_match.group(1).strip()
+        description = comma_match.group(2).strip() or f"AS{asn}"
+        return asn, description
+
+    # Prefix formats: "AS12345 - Desc", "ASN: 12345", "ASN 12345, Desc"
+    prefix_match = _ASN_PREFIX_RE.match(cleaned)
+    if prefix_match:
+        asn = prefix_match.group(1).strip()
+        description = (prefix_match.group(2) or "").strip() or f"AS{asn}"
+        return asn, description
+
+    # Inline fallback: "... ASN 12345 ..."
+    inline_match = _ASN_INLINE_RE.search(cleaned)
+    if inline_match:
+        asn = inline_match.group(1).strip()
+        return asn, cleaned
+
+    return None
 
 
 def _set_company_status(company_id: int, status: str) -> None:
@@ -136,6 +176,7 @@ def handle_pass1(r: redis_lib.Redis, task: dict) -> None:
     lines = _run_amass([
         "amass",
         "intel",
+        "-whois",
         "-org",
         org,
         "-timeout",
@@ -143,12 +184,15 @@ def handle_pass1(r: redis_lib.Redis, task: dict) -> None:
     ])
 
     asns: list[tuple[str, str]] = []
+    seen_asns: set[str] = set()
     for line in lines:
-        match = _ASN_RE.match(line)
-        if not match:
+        record = _extract_asn_record(line)
+        if not record:
             continue
-        asn = match.group(1).strip()
-        description = match.group(2).strip()
+        asn, description = record
+        if asn in seen_asns:
+            continue
+        seen_asns.add(asn)
         asns.append((asn, description))
 
         with db_conn() as conn:
@@ -162,7 +206,14 @@ def handle_pass1(r: redis_lib.Redis, task: dict) -> None:
             )
 
     if not asns:
-        logger.warning("Company %d: no ASNs found for org=%r", company_id, org)
+        sample = " | ".join(lines[:6]) if lines else "<no output>"
+        logger.warning(
+            "Company %d: no ASNs found for org=%r (amass lines=%d, sample=%s)",
+            company_id,
+            org,
+            len(lines),
+            sample,
+        )
         _set_company_status(company_id, "done")
         return
 
