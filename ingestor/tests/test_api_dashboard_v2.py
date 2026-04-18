@@ -540,3 +540,60 @@ def test_stop_target_already_disabled_is_idempotent(client):
     with ingestor_app.db_conn() as conn:
         row = conn.execute("SELECT enabled FROM targets WHERE id = ?", (target_id,)).fetchone()
     assert row["enabled"] == 0
+
+
+def test_purge_target_removes_all_data(client, tmp_path, monkeypatch):
+    test_client, ingestor_app, fake_redis, _ = client
+
+    # Point OUTPUT_DIR to tmp_path so file deletion is testable
+    monkeypatch.setattr(ingestor_app, "_OUTPUT_DIR", str(tmp_path))
+
+    target_id = _insert_target(ingestor_app, scope_root="purge.example.com", enabled=1)
+    endpoint_id = _insert_endpoint(ingestor_app, target_id, "sub.purge.example.com")
+
+    # Create a real file that should be deleted
+    raw_blob = tmp_path / "purge.example.com_nuclei.jsonl"
+    raw_blob.write_text('{"template-id": "test"}\n')
+    _insert_finding(ingestor_app, endpoint_id, raw_blob_path=str(raw_blob))
+
+    # Add a queue task for this target
+    fake_redis.lpush("recon_domain", json.dumps({"domain": "purge.example.com"}))
+
+    res = test_client.post(f"/targets/{target_id}/purge")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["purged"] is True
+    assert body["scope_root"] == "purge.example.com"
+    assert body["files_deleted"] >= 1
+
+    # DB records gone
+    with ingestor_app.db_conn() as conn:
+        assert conn.execute("SELECT id FROM targets WHERE id = ?", (target_id,)).fetchone() is None
+        assert conn.execute("SELECT id FROM subdomains WHERE target_id = ?", (target_id,)).fetchone() is None
+        assert conn.execute("SELECT id FROM endpoints WHERE id = ?", (endpoint_id,)).fetchone() is None
+        assert conn.execute("SELECT id FROM findings WHERE endpoint_id = ?", (endpoint_id,)).fetchone() is None
+
+    # File deleted
+    assert not raw_blob.exists()
+
+    # Queue drained
+    assert fake_redis.llen("recon_domain") == 0
+
+
+def test_purge_target_404(client):
+    test_client, _, _, _ = client
+    res = test_client.post("/targets/9999/purge")
+    assert res.status_code == 404
+
+
+def test_purge_target_no_data(client):
+    """Purge a target with no subdomains/findings — should succeed cleanly."""
+    test_client, ingestor_app, _, _ = client
+    target_id = _insert_target(ingestor_app, scope_root="bare.example.com", enabled=1)
+    res = test_client.post(f"/targets/{target_id}/purge")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["purged"] is True
+    assert body["files_deleted"] == 0
+    with ingestor_app.db_conn() as conn:
+        assert conn.execute("SELECT id FROM targets WHERE id = ?", (target_id,)).fetchone() is None
