@@ -501,6 +501,8 @@ td code,
 }
 
 .table-actions.compact {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 0.25rem;
 }
 
@@ -513,8 +515,10 @@ td code,
 .table-actions.compact button,
 .table-actions.compact a {
   min-height: 2rem;
-  padding: 0.35rem 0.65rem;
-  font-size: 0.82rem;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.8rem;
+  justify-content: center;
+  text-align: center;
 }
 
 .message {
@@ -780,10 +784,13 @@ details.accordion summary::-webkit-details-marker {
     grid-template-columns: 1fr;
   }
 
-  .table-actions,
-  .table-actions.compact {
+  .table-actions {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .table-actions.compact {
+    grid-template-columns: 1fr 1fr;
   }
 }
 
