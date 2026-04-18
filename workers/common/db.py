@@ -99,6 +99,35 @@ CREATE TABLE IF NOT EXISTS notifications (
     sent_at         TEXT    NOT NULL DEFAULT (datetime('now')),
     delivery_status TEXT    NOT NULL DEFAULT 'sent'
 );
+
+CREATE TABLE IF NOT EXISTS companies (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL UNIQUE,
+    status      TEXT    NOT NULL DEFAULT 'idle',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    last_run_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS discovered_asns (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id  INTEGER NOT NULL REFERENCES companies(id),
+    asn         TEXT    NOT NULL,
+    description TEXT,
+    cidr_ranges TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(company_id, asn)
+);
+
+CREATE TABLE IF NOT EXISTS discovered_domains (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id  INTEGER NOT NULL REFERENCES companies(id),
+    domain      TEXT    NOT NULL,
+    ip          TEXT,
+    source_asn  TEXT,
+    status      TEXT    NOT NULL DEFAULT 'pending',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(company_id, domain)
+);
 """
 
 
@@ -149,6 +178,30 @@ def init_db(path: str = None) -> None:
         conn.execute(
             "ALTER TABLE findings ADD COLUMN status TEXT NOT NULL DEFAULT 'open' "
             "CHECK(status IN ('open', 'triaged', 'false_positive', 'fixed'))"
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+    # Company discovery schema migrations (idempotent for existing DBs).
+    try:
+        conn.execute("ALTER TABLE companies ADD COLUMN last_run_at TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        conn.execute("ALTER TABLE discovered_asns ADD COLUMN cidr_ranges TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        conn.execute(
+            "ALTER TABLE discovered_domains ADD COLUMN source_asn TEXT"
+        )
+        conn.execute(
+            "ALTER TABLE discovered_domains ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'"
         )
         conn.commit()
     except sqlite3.OperationalError:
