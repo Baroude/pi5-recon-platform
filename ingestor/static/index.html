@@ -17,7 +17,7 @@
           <span>Recon</span>
         </a>
         <nav class="nav-links" aria-label="Primary">
-          <a class="is-active" href="/ui/index.html">Dashboard</a>
+          <a class="is-active" href="/ui/index.html" aria-current="page">Dashboard</a>
           <a href="/ui/findings.html">Findings</a>
           <a href="/ui/targets.html">Targets</a>
           <a href="/ui/ops.html">Ops</a>
@@ -33,23 +33,20 @@
       <div id="page-message" class="message" role="status" aria-live="polite"></div>
       <div id="stale-banner" class="message error stale-banner" role="alert"></div>
 
-      <section class="hero">
-        <span class="eyebrow">Operations Board</span>
-        <div class="hero-row">
-          <div>
-            <h1>Pipeline health without the clutter</h1>
-            <p>The dashboard is now focused on live throughput, worker freshness, and target posture. Findings triage, target editing, and DLQ recovery live on their own pages so this view stays operational instead of trying to do everything at once.</p>
-          </div>
-          <div class="hero-actions">
-            <a href="/ui/findings.html?status=open" role="button">Review open findings</a>
-            <a href="/ui/ops.html" role="button" class="secondary">Inspect queues and DLQ</a>
-          </div>
+      <section class="page-header panel page-section">
+        <div class="page-header-copy">
+          <h1>Pipeline health without the clutter</h1>
+          <p>Live throughput, worker freshness, and target posture stay here. Findings triage, target editing, and DLQ recovery live on their own pages.</p>
+        </div>
+        <div class="page-header-actions">
+          <a href="/ui/findings.html?status=open" role="button">Review open findings</a>
+          <a href="/ui/ops.html" role="button" class="secondary">Inspect queues and DLQ</a>
         </div>
       </section>
 
       <section id="overview-cards" class="card-grid" aria-label="Overview metrics"></section>
 
-      <section class="panel">
+      <section class="panel page-section">
         <div class="panel-header">
           <div>
             <h2 class="panel-title">Pipeline</h2>
@@ -59,7 +56,7 @@
         <div id="pipeline-grid" class="stage-grid"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel page-section">
         <div class="panel-header">
           <div>
             <h2 class="panel-title">Worker activity</h2>
@@ -82,7 +79,7 @@
         </div>
       </section>
 
-      <section class="panel">
+      <section class="panel page-section">
         <div class="panel-header">
           <div>
             <h2 class="panel-title">Target overview</h2>

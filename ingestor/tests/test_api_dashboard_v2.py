@@ -1,5 +1,6 @@
 import importlib
 import json
+import re
 import sys
 import types
 from pathlib import Path
@@ -607,3 +608,153 @@ def test_purge_target_no_data(client):
     assert body["files_deleted"] == 0
     with ingestor_app.db_conn() as conn:
         assert conn.execute("SELECT id FROM targets WHERE id = ?", (target_id,)).fetchone() is None
+
+
+@pytest.mark.parametrize(
+    ("path", "data_page"),
+    [
+        ("/ui/index.html", "dashboard"),
+        ("/ui/findings.html", "findings"),
+        ("/ui/targets.html", "targets"),
+        ("/ui/ops.html", "ops"),
+    ],
+)
+def test_shared_refresh_shell(client, path, data_page):
+    test_client, _, _, _ = client
+    res = test_client.get(path)
+    assert res.status_code == 200
+
+    html = res.text
+    nav_match = re.search(r'<nav class="nav-links" aria-label="Primary">(.*?)</nav>', html, re.S)
+    assert nav_match is not None
+
+    nav_html = nav_match.group(1)
+    anchors = list(re.finditer(r'<a\b([^>]*)>(.*?)</a>', nav_html, re.S))
+    current_links = []
+    for anchor in anchors:
+        attrs = anchor.group(1)
+        href_match = re.search(r'href="([^"]+)"', attrs)
+        assert href_match is not None
+        if 'aria-current="page"' in attrs:
+            current_links.append(href_match.group(1))
+
+    expected_current_href = {
+        "/ui/index.html": "/ui/index.html",
+        "/ui/findings.html": "/ui/findings.html",
+        "/ui/targets.html": "/ui/targets.html",
+        "/ui/ops.html": "/ui/ops.html",
+    }[path]
+
+    assert f'<body data-page="{data_page}"' in html
+    assert '/ui/app.css' in html
+    assert '/ui/app.js' in html
+    assert 'class="topbar"' in html
+    header_match = re.search(r'<section\b[^>]*class="([^"]+)"[^>]*>\s*<div class="page-header-copy">', html, re.S)
+    assert header_match is not None
+    header_tokens = set(header_match.group(1).split())
+    assert "page-header" in header_tokens
+    assert "panel" in header_tokens
+    assert 'class="page-header-copy"' in html
+    assert 'class="page-header-actions"' in html
+    assert len(current_links) == 1
+    assert current_links[0] == expected_current_href
+
+
+def test_refresh_tokens_and_layout_hooks(client):
+    test_client, _, _, _ = client
+    res = test_client.get("/ui/app.css")
+    assert res.status_code == 200
+
+    css = res.text
+    for marker in [
+        "--app-bg:",
+        "--app-surface-muted:",
+        "--app-accent-soft:",
+        ".page-header {",
+        ".page-header-copy {",
+        ".page-header-actions {",
+        ".page-section {",
+        ".table-actions.compact {",
+        ".inspector-panel {",
+    ]:
+        assert marker in css
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/ui/index.html",
+        "/ui/findings.html",
+        "/ui/targets.html",
+        "/ui/ops.html",
+    ],
+)
+def test_dense_layout_hooks(client, path):
+    test_client, _, _, _ = client
+    res = test_client.get(path)
+    assert res.status_code == 200
+
+    html = res.text
+
+    if path == "/ui/index.html":
+        section_match = re.search(r'<section\b[^>]*class="([^"]+)"[^>]*>\s*<div class="page-header-copy">', html, re.S)
+        assert section_match is not None
+        tokens = set(section_match.group(1).split())
+        assert "page-header" in tokens
+        assert "panel" in tokens
+        assert "page-section" in tokens
+
+        overview_match = re.search(r'<section\b[^>]*id="overview-cards"[^>]*class="([^"]+)"[^>]*>', html)
+        assert overview_match is not None
+        assert set(overview_match.group(1).split()) == {"card-grid"}
+
+        targets_match = re.search(r'<tbody\b[^>]*id="dashboard-targets-body"[^>]*>', html)
+        assert targets_match is not None
+    elif path == "/ui/findings.html":
+        form_match = re.search(r'<form\b[^>]*id="findings-filters"[^>]*class="([^"]+)"[^>]*>', html)
+        assert form_match is not None
+        form_tokens = set(form_match.group(1).split())
+        assert {"filters", "compact", "filters-toolbar"} <= form_tokens
+
+        action_match = re.search(r'<div\b[^>]*class="([^"]+)"[^>]*>\s*<button type="submit">Apply</button>', html, re.S)
+        assert action_match is not None
+        action_tokens = set(action_match.group(1).split())
+        assert {"toolbar-actions", "table-actions", "compact"} <= action_tokens
+
+        aside_match = re.search(r'<aside\b[^>]*id="finding-detail"[^>]*class="([^"]+)"[^>]*>', html)
+        assert aside_match is not None
+        aside_tokens = set(aside_match.group(1).split())
+        assert {"panel", "page-section", "finding-detail", "inspector-panel"} <= aside_tokens
+
+        body_match = re.search(r'<tbody\b[^>]*id="findings-body"[^>]*>', html)
+        assert body_match is not None
+    elif path == "/ui/targets.html":
+        create_match = re.search(r'<details\b[^>]*class="([^"]+)"[^>]*>\s*<summary><strong>Create target</strong></summary>', html, re.S)
+        assert create_match is not None
+        create_tokens = set(create_match.group(1).split())
+        assert {"panel", "page-section", "form-panel"} <= create_tokens
+
+        target_dialogs = {
+            "target-dialog": False,
+            "confirm-delete-dialog": False,
+        }
+        for dialog_match in re.finditer(r'<dialog\b[^>]*id="([^"]+)"[^>]*class="([^"]+)"[^>]*>', html):
+            dialog_id = dialog_match.group(1)
+            if dialog_id in target_dialogs:
+                tokens = set(dialog_match.group(2).split())
+                assert {"target-dialog", "inspector-panel"} <= tokens
+                target_dialogs[dialog_id] = True
+        assert all(target_dialogs.values())
+
+        body_match = re.search(r'<tbody\b[^>]*id="targets-body"[^>]*>', html)
+        assert body_match is not None
+    elif path == "/ui/ops.html":
+        section_matches = re.findall(r'<section\b[^>]*class="([^"]+)"[^>]*>', html)
+        assert any({"panel", "page-section"} <= set(tokens.split()) for tokens in section_matches)
+
+        dlq_match = re.search(r'<div\b[^>]*id="dlq-list"[^>]*class="([^"]+)"[^>]*>', html)
+        assert dlq_match is not None
+        assert set(dlq_match.group(1).split()) == {"accordion-list"}
+
+        failed_jobs_match = re.search(r'<tbody\b[^>]*id="failed-jobs-body"[^>]*>', html)
+        assert failed_jobs_match is not None
