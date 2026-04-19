@@ -234,6 +234,31 @@ def _drain_target_queues(r: redis_lib.Redis, scope_root: str) -> int:
     return drained
 
 
+_COMPANY_QUEUES = [
+    "company_intel",
+    "company_intel_crt",
+    "company_intel_pivot",
+    "company_intel_ripestat",
+]
+
+
+def _drain_company_queues(r: redis_lib.Redis, company_id: int) -> int:
+    """Remove all pending/processing queue entries for a company. Returns count removed."""
+    drained = 0
+    queue_lists = _COMPANY_QUEUES + [f"{q}:processing" for q in _COMPANY_QUEUES]
+    for queue in queue_lists:
+        items = r.lrange(queue, 0, -1)
+        for raw in items:
+            try:
+                payload = json.loads(raw if isinstance(raw, str) else raw.decode())
+                if payload.get("company_id") == company_id:
+                    drained += r.lrem(queue, 1, raw)
+            except Exception:
+                continue
+    r.delete(f"company:{company_id}:pending_jobs")
+    return drained
+
+
 def _collect_target_file_paths(target_id: int, scope_root: str) -> set[str]:
     """Read file paths to delete for a target. Does not delete anything."""
     paths: set[str] = set()
@@ -1587,6 +1612,33 @@ def rediscover_company(company_id: int):
         "seed_domain": company["seed_domain"] if "seed_domain" in company.keys() else None,
     })
     return {"status": "running", "company_id": company_id}
+
+
+@app.post("/companies/{company_id}/stop", status_code=200)
+def stop_company(company_id: int):
+    with db_conn() as conn:
+        company = conn.execute("SELECT name FROM companies WHERE id = ?", (company_id,)).fetchone()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+        conn.execute("UPDATE companies SET status = 'idle' WHERE id = ?", (company_id,))
+    drained = _drain_company_queues(get_r(), company_id)
+    logger.info("Stopped company %s (id=%d) — drained %d task(s)", company["name"], company_id, drained)
+    return {"stopped": True, "company_id": company_id, "tasks_drained": drained}
+
+
+@app.post("/companies/{company_id}/purge", status_code=200)
+def purge_company(company_id: int):
+    with db_conn() as conn:
+        company = conn.execute("SELECT name FROM companies WHERE id = ?", (company_id,)).fetchone()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+        conn.execute("DELETE FROM discovered_emails WHERE company_id = ?", (company_id,))
+        conn.execute("DELETE FROM discovered_asns WHERE company_id = ?", (company_id,))
+        conn.execute("DELETE FROM discovered_domains WHERE company_id = ?", (company_id,))
+        conn.execute("DELETE FROM companies WHERE id = ?", (company_id,))
+    _drain_company_queues(get_r(), company_id)
+    logger.info("Purged company %s (id=%d)", company["name"], company_id)
+    return {"purged": True, "company_id": company_id}
 
 
 @app.get("/companies/{company_id}/pending")

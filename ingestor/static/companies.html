@@ -96,7 +96,9 @@
           </div>
           <div class="page-header-actions">
             <button id="company-back" class="secondary">Back</button>
+            <button id="company-stop" class="secondary">Stop</button>
             <button id="company-rerun">Re-run discovery</button>
+            <button id="company-delete" class="danger">Delete</button>
           </div>
         </section>
 
@@ -288,6 +290,8 @@
             <td class="target-actions">
               <button type="button" data-open-company="${company.id}">Open</button>
               <button type="button" class="secondary" data-rerun-company="${company.id}" data-company-name="${escapeHtml(company.name)}">Run</button>
+              ${company.status === 'running' ? `<button type="button" class="secondary" data-stop-company="${company.id}" data-company-name="${escapeHtml(company.name)}">Stop</button>` : ''}
+              <button type="button" class="danger" data-delete-company="${company.id}" data-company-name="${escapeHtml(company.name)}">Del</button>
             </td>
           </tr>
         `).join("");
@@ -396,6 +400,18 @@
         setMessage("success", `Discovery started for ${companyName}.`);
       }
 
+      async function stopCompany(companyId, companyName) {
+        await api(`/companies/${companyId}/stop`, { method: "POST" });
+        setMessage("success", `Stopped discovery for ${companyName} — pipeline drained.`);
+      }
+
+      async function purgeCompany(companyId, companyName) {
+        if (!window.confirm(`Delete "${companyName}" and all its discovery data? This cannot be undone.`)) return false;
+        await api(`/companies/${companyId}/purge`, { method: "POST" });
+        setMessage("success", `Deleted ${companyName}.`);
+        return true;
+      }
+
       async function performAction(path, payload) {
         await api(path, {
           method: "POST",
@@ -441,16 +457,58 @@
           } catch (error) {
             setMessage("error", error.message);
           }
+          return;
+        }
+
+        const stopButton = event.target.closest("button[data-stop-company]");
+        if (stopButton) {
+          try {
+            await stopCompany(stopButton.dataset.stopCompany, stopButton.dataset.companyName || "company");
+            await refreshCompanies();
+          } catch (error) {
+            setMessage("error", error.message);
+          }
+          return;
+        }
+
+        const deleteButton = event.target.closest("button[data-delete-company]");
+        if (deleteButton) {
+          try {
+            const deleted = await purgeCompany(deleteButton.dataset.deleteCompany, deleteButton.dataset.companyName || "company");
+            if (deleted) await refreshCompanies();
+          } catch (error) {
+            setMessage("error", error.message);
+          }
         }
       });
 
       document.getElementById("company-back").addEventListener("click", closeCompanyDetail);
+
+      document.getElementById("company-stop").addEventListener("click", async () => {
+        if (!selectedCompanyId) return;
+        try {
+          await stopCompany(selectedCompanyId, selectedCompanyName || "company");
+          await refreshCompanyDetail();
+        } catch (error) {
+          setMessage("error", error.message);
+        }
+      });
 
       document.getElementById("company-rerun").addEventListener("click", async () => {
         if (!selectedCompanyId) return;
         try {
           await runDiscovery(selectedCompanyId, selectedCompanyName || "company");
           await refreshCompanyDetail();
+        } catch (error) {
+          setMessage("error", error.message);
+        }
+      });
+
+      document.getElementById("company-delete").addEventListener("click", async () => {
+        if (!selectedCompanyId) return;
+        try {
+          const deleted = await purgeCompany(selectedCompanyId, selectedCompanyName || "company");
+          if (deleted) closeCompanyDetail();
         } catch (error) {
           setMessage("error", error.message);
         }
