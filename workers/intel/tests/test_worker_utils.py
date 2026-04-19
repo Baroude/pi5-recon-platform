@@ -169,3 +169,79 @@ def test_resolve_lei_returns_none_when_no_match(monkeypatch):
 
     monkeypatch.setattr(worker, "_get_json", fake_get_json)
     assert _resolve_lei("Unknown Corp") is None
+
+
+# ---------------------------------------------------------------------------
+# crt.sh rate limiting helpers
+# ---------------------------------------------------------------------------
+
+def test_wait_for_crt_slot_waits_for_ttl(monkeypatch):
+    class FakeRedis:
+        def __init__(self):
+            self.calls = 0
+
+        def set(self, *args, **kwargs):
+            self.calls += 1
+            return self.calls >= 2
+
+        def ttl(self, _key):
+            return 3
+
+    sleeps: list[int] = []
+    monkeypatch.setattr(worker, "CRT_SH_THROTTLE_KEY", "throttle:test")
+    monkeypatch.setattr(worker, "CRT_SH_MIN_INTERVAL_SECS", 15)
+    monkeypatch.setattr(worker.time, "sleep", lambda secs: sleeps.append(secs))
+
+    worker._wait_for_crt_slot(FakeRedis())
+    assert sleeps == [3]
+
+
+def test_get_crt_json_honors_retry_after_header(monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code, payload=None, headers=None):
+            self.status_code = status_code
+            self._payload = payload if payload is not None else []
+            self.headers = headers or {}
+
+        def json(self):
+            return self._payload
+
+    responses = [
+        FakeResponse(429, headers={"Retry-After": "17"}),
+        FakeResponse(200, payload=[]),
+    ]
+    sleeps: list[int] = []
+
+    monkeypatch.setattr(worker, "_wait_for_crt_slot", lambda _r: None)
+    monkeypatch.setattr(worker.time, "sleep", lambda secs: sleeps.append(secs))
+    monkeypatch.setattr(worker.requests, "get", lambda *a, **kw: responses.pop(0))
+
+    payload = worker._get_crt_json(object(), {"q": "%.example.com", "output": "json"})
+    assert payload == []
+    assert sleeps == [17]
+
+
+def test_get_crt_json_uses_default_retry_after_when_header_invalid(monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code, payload=None, headers=None):
+            self.status_code = status_code
+            self._payload = payload if payload is not None else []
+            self.headers = headers or {}
+
+        def json(self):
+            return self._payload
+
+    responses = [
+        FakeResponse(429, headers={"Retry-After": "later"}),
+        FakeResponse(200, payload=[]),
+    ]
+    sleeps: list[int] = []
+
+    monkeypatch.setattr(worker, "_wait_for_crt_slot", lambda _r: None)
+    monkeypatch.setattr(worker, "CRT_SH_429_RETRY_AFTER_SECS", 61)
+    monkeypatch.setattr(worker.time, "sleep", lambda secs: sleeps.append(secs))
+    monkeypatch.setattr(worker.requests, "get", lambda *a, **kw: responses.pop(0))
+
+    payload = worker._get_crt_json(object(), {"q": "%.example.com", "output": "json"})
+    assert payload == []
+    assert sleeps == [61]

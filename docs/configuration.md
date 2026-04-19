@@ -39,10 +39,18 @@ When they differ, the compose file wins for the standard stack deployment.
 | `MAX_RECON_CONCURRENCY` | `2` | subfinder thread count |
 | `AMASS_TIMEOUT_MINUTES` | `20` | amass timeout |
 | `MAX_HTTPX_CONCURRENCY` | `10` | httpx thread count |
+| `INTEL_TIMEOUT_MINUTES` | `10` | company intel worker timeout budget |
 | `MAX_NUCLEI_CONCURRENCY` | `1` | nuclei `-c` concurrency |
 | `NUCLEI_PROC_TIMEOUT` | `1800` | nuclei process kill timeout (seconds) |
 | `NUCLEI_THROTTLE_SECS` | `30` | Per-scope throttle between nuclei tasks |
 | `NUCLEI_BATCH_SIZE` | `1` | Max `scan_http` tasks grouped into one nuclei run in code fallback defaults |
+
+## Company Intel (crt.sh)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `CRT_SH_MIN_INTERVAL_SECS` | `15` | Global minimum gap between crt.sh HTTP requests across all intel workers (Redis-coordinated). |
+| `CRT_SH_429_RETRY_AFTER_SECS` | `60` | Fallback wait when crt.sh returns HTTP 429 without a usable `Retry-After` header. |
 
 ## Active Recon (DNS Brute)
 

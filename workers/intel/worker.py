@@ -43,6 +43,11 @@ PROC_RIPESTAT  = "company_intel_ripestat:processing"
 WORKER_NAME = "worker-intel"
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", 2))
 ST_KEY      = os.environ.get("SECURITYTRAILS_API_KEY", "")
+CRT_SH_MIN_INTERVAL_SECS = max(1, int(os.environ.get("CRT_SH_MIN_INTERVAL_SECS", 15)))
+CRT_SH_429_RETRY_AFTER_SECS = max(
+    1, int(os.environ.get("CRT_SH_429_RETRY_AFTER_SECS", 60))
+)
+CRT_SH_THROTTLE_KEY = os.environ.get("CRT_SH_THROTTLE_KEY", "throttle:crtsh:https")
 _LEI_PATTERN = re.compile(r"^[A-Z0-9]{20}$")
 _HOST_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _COMMON_2LEVEL_SUFFIXES = {
@@ -212,9 +217,53 @@ def _post_json(url: str, headers: dict | None = None, body: dict | None = None) 
         return None
 
 
+# ── crt.sh throttle helpers ───────────────────────────────────────────────────
+
+def _wait_for_crt_slot(r: redis_lib.Redis) -> None:
+    """
+    Coordinate crt.sh traffic across all worker-intel instances.
+
+    With a 15s default interval, the fleet stays at <= 4 requests/min/IP.
+    """
+    while True:
+        try:
+            acquired = r.set(
+                CRT_SH_THROTTLE_KEY,
+                "1",
+                nx=True,
+                ex=CRT_SH_MIN_INTERVAL_SECS,
+            )
+            if acquired:
+                return
+            ttl = r.ttl(CRT_SH_THROTTLE_KEY)
+            sleep_secs = (
+                CRT_SH_MIN_INTERVAL_SECS if ttl is None or ttl < 1 else int(ttl)
+            )
+            logger.info("Throttling crt.sh requests - waiting %ds", sleep_secs)
+            time.sleep(sleep_secs)
+        except Exception as exc:
+            logger.warning(
+                "crt.sh throttle coordination failed (%s); sleeping %ds",
+                exc,
+                CRT_SH_MIN_INTERVAL_SECS,
+            )
+            time.sleep(CRT_SH_MIN_INTERVAL_SECS)
+            return
+
+
+def _retry_after_seconds(resp) -> int:
+    retry_after = (getattr(resp, "headers", {}) or {}).get("Retry-After")
+    if retry_after is None:
+        return CRT_SH_429_RETRY_AFTER_SECS
+    try:
+        return max(int(retry_after), CRT_SH_MIN_INTERVAL_SECS)
+    except (TypeError, ValueError):
+        return CRT_SH_429_RETRY_AFTER_SECS
+
+
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
-def _get_crt_json(params: dict) -> list[dict]:
+def _get_crt_json(r: redis_lib.Redis, params: dict) -> list[dict]:
     """
     crt.sh is occasionally flaky (timeouts/5xx). Retry transient failures
     before giving up so queue-level retries are reserved for persistent errors.
@@ -225,11 +274,14 @@ def _get_crt_json(params: dict) -> list[dict]:
 
     for attempt in range(1, 5):
         try:
+            _wait_for_crt_slot(r)
             resp = requests.get(url, params=params, timeout=45)
             if resp.status_code != 200:
                 status = resp.status_code
                 if status in transient_statuses and attempt < 4:
-                    delay_secs = attempt * 2
+                    delay_secs = (
+                        _retry_after_seconds(resp) if status == 429 else attempt * 2
+                    )
                     logger.warning(
                         "crt.sh status=%d (attempt %d/4, retry in %ds) params=%r",
                         status,
@@ -430,7 +482,7 @@ def handle_crt(r, task: dict) -> None:
         params = {"q": f"%.{value}", "output": "json"}
         source = "crt_seed"
 
-    certs = _get_crt_json(params)
+    certs = _get_crt_json(r, params)
     if not certs:
         logger.info("Company %d: crt.sh %s=%r returned no rows", company_id, query_type, value)
         return
