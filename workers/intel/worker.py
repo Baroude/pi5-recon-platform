@@ -44,6 +44,31 @@ WORKER_NAME = "worker-intel"
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", 2))
 ST_KEY      = os.environ.get("SECURITYTRAILS_API_KEY", "")
 _LEI_PATTERN = re.compile(r"^[A-Z0-9]{20}$")
+_HOST_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_COMMON_2LEVEL_SUFFIXES = {
+    "ac.uk",
+    "co.in",
+    "co.jp",
+    "co.kr",
+    "co.uk",
+    "com.au",
+    "com.br",
+    "com.cn",
+    "com.hk",
+    "com.mx",
+    "com.sg",
+    "com.tr",
+    "com.tw",
+    "edu.cn",
+    "gov.cn",
+    "ne.jp",
+    "net.au",
+    "net.cn",
+    "or.jp",
+    "org.au",
+    "org.cn",
+    "org.uk",
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,12 +105,53 @@ def _job_done(r, company_id: int) -> None:
 
 # ── Pure utility functions ────────────────────────────────────────────────────
 
+def _normalize_hostname(raw: str) -> str:
+    """
+    Normalize and validate a DNS hostname-like token.
+    Returns an empty string for non-domain values such as legal entity names
+    (for example: "Kering S.A.").
+    """
+    host = raw.strip().lower()
+    if not host:
+        return ""
+
+    while host.startswith("*."):
+        host = host[2:]
+    host = host.strip(".")
+    if not host or "." not in host:
+        return ""
+    if len(host) > 253 or ".." in host:
+        return ""
+    if any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789.-" for ch in host):
+        return ""
+
+    labels = host.split(".")
+    if len(labels) < 2:
+        return ""
+    if any(not _HOST_LABEL_RE.fullmatch(label) for label in labels):
+        return ""
+
+    tld = labels[-1]
+    if len(tld) < 2:
+        return ""
+    if not (tld.isalpha() or tld.startswith("xn--")):
+        return ""
+    return host
+
+
 def _extract_root_domain(domain: str) -> str:
-    domain = re.sub(r"^\*\.", "", domain.lower().strip())
-    parts = domain.split(".")
-    if len(parts) >= 2:
-        return ".".join(parts[-2:])
-    return domain
+    host = _normalize_hostname(domain)
+    if not host:
+        return ""
+
+    labels = host.split(".")
+    if len(labels) < 2:
+        return ""
+
+    suffix2 = ".".join(labels[-2:])
+    if len(labels) >= 3 and suffix2 in _COMMON_2LEVEL_SUFFIXES:
+        return ".".join(labels[-3:])
+    return suffix2
 
 
 def _compute_trust(
@@ -147,6 +213,54 @@ def _post_json(url: str, headers: dict | None = None, body: dict | None = None) 
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
+
+def _get_crt_json(params: dict) -> list[dict]:
+    """
+    crt.sh is occasionally flaky (timeouts/5xx). Retry transient failures
+    before giving up so queue-level retries are reserved for persistent errors.
+    """
+    url = "https://crt.sh/"
+    transient_statuses = {404, 408, 429, 500, 502, 503, 504}
+    last_error: Exception | None = None
+
+    for attempt in range(1, 5):
+        try:
+            resp = requests.get(url, params=params, timeout=45)
+            if resp.status_code != 200:
+                status = resp.status_code
+                if status in transient_statuses and attempt < 4:
+                    delay_secs = attempt * 2
+                    logger.warning(
+                        "crt.sh status=%d (attempt %d/4, retry in %ds) params=%r",
+                        status,
+                        attempt,
+                        delay_secs,
+                        params,
+                    )
+                    time.sleep(delay_secs)
+                    continue
+                raise RuntimeError(f"status={status}")
+            payload = resp.json()
+            if not isinstance(payload, list):
+                raise RuntimeError(f"unexpected payload type={type(payload).__name__}")
+            return payload
+        except Exception as exc:
+            is_transient = isinstance(exc, (requests.Timeout, requests.ConnectionError, ValueError))
+            last_error = exc
+            if not is_transient or attempt == 4:
+                break
+            delay_secs = attempt * 2
+            logger.warning(
+                "crt.sh query failed (attempt %d/4, retry in %ds): %s params=%r",
+                attempt,
+                delay_secs,
+                exc,
+                params,
+            )
+            time.sleep(delay_secs)
+
+    raise RuntimeError(f"crt.sh request failed after retries params={params!r}: {last_error}")
+
 
 def _is_valid_lei(value: str | None) -> bool:
     if not value:
@@ -316,8 +430,9 @@ def handle_crt(r, task: dict) -> None:
         params = {"q": f"%.{value}", "output": "json"}
         source = "crt_seed"
 
-    certs = _get_json("https://crt.sh/", params=params)
-    if not certs or not isinstance(certs, list):
+    certs = _get_crt_json(params)
+    if not certs:
+        logger.info("Company %d: crt.sh %s=%r returned no rows", company_id, query_type, value)
         return
 
     seen: set[str] = set()

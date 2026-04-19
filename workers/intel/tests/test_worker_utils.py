@@ -60,6 +60,21 @@ def test_extract_handles_deep_subdomain():
 def test_extract_lowercases():
     assert _extract_root_domain("KERING.COM") == "kering.com"
 
+def test_extract_rejects_legal_entity_suffix():
+    assert _extract_root_domain("Kering S.A.") == ""
+
+def test_extract_rejects_invalid_trailing_dot_root():
+    assert _extract_root_domain("a.") == ""
+
+def test_extract_handles_common_second_level_suffix_com_cn():
+    assert _extract_root_domain("api.alexandermcqueen.com.cn") == "alexandermcqueen.com.cn"
+
+def test_extract_handles_common_second_level_suffix_co_uk():
+    assert _extract_root_domain("login.example.co.uk") == "example.co.uk"
+
+def test_extract_keeps_valid_country_tld_domain():
+    assert _extract_root_domain("icat.sowind.ch") == "sowind.ch"
+
 
 # ---------------------------------------------------------------------------
 # _compute_trust
